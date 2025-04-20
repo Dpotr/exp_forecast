@@ -216,7 +216,32 @@ for cat in df['category'].unique():
     forecast_active = recent_nonzero > 0
     ts = df_cat.groupby('date')['amount'].sum().reindex(pd.date_range(df_cat['date'].min(), df['date'].max()), fill_value=0)
     # --- Define forecasting methods ---
-    def mean_method(ts, fh): return np.repeat(np.mean(ts[-30:]), fh)
+    def mean_method(ts, fh):
+        # Incorporate both weekly and within-month seasonality into the mean forecast
+        import pandas as pd
+        ts = pd.Series(ts)
+        # Compute base mean from last 30 days
+        base_mean = ts[-30:].mean()
+        # Compute weekday and day-of-month factors
+        idx = ts.index if hasattr(ts, 'index') else pd.RangeIndex(len(ts))
+        if not isinstance(idx, pd.DatetimeIndex):
+            # If index is not datetime, fallback to simple mean
+            return np.repeat(base_mean, fh)
+        # Build seasonality factors
+        last_60 = ts[-60:]
+        weekday_avg = last_60.groupby(last_60.index.dayofweek).mean()
+        weekday_factor = weekday_avg / weekday_avg.mean()
+        dom_avg = last_60.groupby(last_60.index.day).mean()
+        dom_factor = dom_avg / dom_avg.mean()
+        # Forecast dates
+        forecast_dates = pd.date_range(idx[-1] + pd.Timedelta(days=1), periods=fh)
+        forecast = []
+        for d in forecast_dates:
+            wfac = weekday_factor.get(d.dayofweek, 1.0)
+            dfac = dom_factor.get(d.day, 1.0)
+            forecast.append(base_mean * wfac * dfac)
+        return np.array(forecast)
+
     def median_method(ts, fh): return np.repeat(np.median(ts[-30:]), fh)
     def zero_method(ts, fh): return np.zeros(fh)
     def croston_method(ts, fh): return croston(ts, fh)

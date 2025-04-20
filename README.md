@@ -168,6 +168,21 @@ Suppose you have the following expenses in the last 30 days:
 ### Troubleshooting
 - If you get a diagnostic printout, it means some records were not matched due to subtle formatting issues. The script now filters out all empty/NaN/zero rows, so only real records are processed.
 
+## Seasonality Diagnostics
+
+You can now analyze both weekly and within-month seasonality in your expenses using the `seasonality_diagnostics.py` script.
+
+### How to Use
+- Run the script with `python seasonality_diagnostics.py` in your project directory.
+- It will show two plots:
+  1. **Average Spending by Weekday** (Monday–Sunday)
+  2. **Average Spending by Day of Month** (1–31)
+- You can also specify a category by editing the script to pass `category='your category'` to the plotting functions.
+
+### Why This Matters
+- These diagnostics help you see patterns like higher weekend spending or spikes around payday/rent.
+- Use these insights to make your forecasts more life-like and confident!
+
 ## Requirements
 - Python 3.8+
 - See `requirements.txt` for dependencies
