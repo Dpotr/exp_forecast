@@ -162,20 +162,30 @@ backtest_window = 60  # days for backtesting
 forecast_export_rows = []
 
 for cat in df['category'].unique():
-    # --- Aggregate by date ---
+    # --- Restrict to last 30 days for most adaptive forecast ---
     df_cat = df[df['category'] == cat].copy()
+    last_30_start = df['date'].max() - pd.Timedelta(days=30)
+    df_cat = df_cat[df_cat['date'] >= last_30_start]
+    # --- Outlier removal: drop top 1% ---
+    if len(df_cat) > 10:
+        threshold = df_cat['amount'].quantile(0.99)
+        df_cat = df_cat[df_cat['amount'] <= threshold]
+    # --- Aggregate by date ---
     df_cat = df_cat.groupby(['date', 'country'], as_index=False)['amount'].sum()
     df_cat = df_cat.sort_values('date')
-    # --- Outlier clipping (cap at 99th percentile) ---
-    cap = df_cat['amount'].quantile(0.99)
-    df_cat['amount'] = df_cat['amount'].clip(upper=cap)
+    # --- Log-transform for stability ---
+    df_cat['log_amount'] = np.log1p(df_cat['amount'])
     # Prepare for Prophet
     prophet_df = pd.DataFrame({
         'ds': df_cat['date'],
-        'y': df_cat['amount'],
+        'y': df_cat['log_amount'],
         'country': df_cat['country']
     })
     prophet_df['country'] = prophet_df['country'].astype(str)
+    # --- Skip if not enough data ---
+    if len(prophet_df.dropna()) < 2:
+        st.warning(f"Not enough data to forecast for category '{cat}' (need at least 2 days in recent period). Skipping.")
+        continue
     m = Prophet(interval_width=0.95, daily_seasonality=True, yearly_seasonality=True)
     for c in prophet_df['country'].unique():
         m.add_regressor(f"country_{c}")
@@ -190,21 +200,24 @@ for cat in df['category'].unique():
     for c in prophet_df['country'].unique():
         future[f"country_{c}"] = int(last_country == c)
     forecast = m.predict(future)
-    # Collect forecast results (clamp to zero)
+    # Inverse log-transform, clamp to zero
     for i, row in forecast.iterrows():
+        forecast_val = max(np.expm1(row['yhat']), 0)
+        lower_val = max(np.expm1(row['yhat_lower']), 0)
+        upper_val = max(np.expm1(row['yhat_upper']), 0)
         results.append({
             'category': cat,
             'date': row['ds'].date(),
-            'forecast': max(row['yhat'], 0),
-            'lower': max(row['yhat_lower'], 0),
-            'upper': max(row['yhat_upper'], 0)
+            'forecast': forecast_val,
+            'lower': lower_val,
+            'upper': upper_val
         })
         forecast_export_rows.append({
             'category': cat,
             'date': row['ds'].date(),
-            'forecast': max(row['yhat'], 0),
-            'lower': max(row['yhat_lower'], 0),
-            'upper': max(row['yhat_upper'], 0)
+            'forecast': forecast_val,
+            'lower': lower_val,
+            'upper': upper_val
         })
     # --- Backtesting ---
     # Use last N days for backtest
@@ -220,7 +233,7 @@ for cat in df['category'].unique():
             if len(train_bt) < 10: continue
             bt_prophet_df = pd.DataFrame({
                 'ds': train_bt['date'],
-                'y': train_bt['amount'],
+                'y': train_bt['log_amount'],
                 'country': train_bt['country'].astype(str)
             })
             for c in bt_prophet_df['country'].unique():
@@ -235,8 +248,8 @@ for cat in df['category'].unique():
             for c in bt_prophet_df['country'].unique():
                 future_bt[f"country_{c}"] = int(last_country_bt == c)
             pred_bt = m_bt.predict(future_bt)
-            actuals.append(test_bt['amount'].sum())
-            preds.append(pred_bt['yhat'].iloc[0])
+            actuals.append(np.expm1(test_bt['log_amount'].sum()))
+            preds.append(np.expm1(pred_bt['yhat'].iloc[0]))
         # KPIs
         if len(actuals) > 0:
             mae = mean_absolute_error(actuals, preds)
@@ -268,6 +281,39 @@ if not forecast_df.empty:
     total_sum = total_forecast['forecast'].sum()
     st.metric(label="Total Forecasted Expenses (7 days)", value=f"{total_sum:.2f}")
     st.dataframe(total_forecast.rename(columns={"forecast": "Total Forecast"}))
+
+    # --- Table: 7-day forecast by day/category ---
+    st.write("#### Forecast Table: Next 7 Days by Category")
+    forecast_pivot = forecast_df.pivot(index='date', columns='category', values='forecast').fillna(0)
+    st.dataframe(forecast_pivot.style.format("{:.2f}"))
+
+    # --- Stacked column chart: 30 days history + 7 days forecast ---
+    st.write("#### Stacked Column Chart: 30 Days History + 7 Days Forecast")
+    # Prepare historical data (last 30 days)
+    last_30 = df[df['date'] >= (df['date'].max() - pd.Timedelta(days=30))]
+    hist_pivot = last_30.groupby(['date', 'category'])['amount'].sum().reset_index()
+    hist_pivot = hist_pivot.pivot(index='date', columns='category', values='amount').fillna(0)
+    # Combine history and forecast
+    combined = pd.concat([hist_pivot, forecast_pivot], axis=0)
+    # Plot
+    fig_stacked = go.Figure()
+    for cat in combined.columns:
+        fig_stacked.add_trace(go.Bar(
+            x=combined.index,
+            y=combined[cat],
+            name=cat
+        ))
+    fig_stacked.update_layout(
+        barmode='stack',
+        title="Expenses: Last 30 Days (Actual) + Next 7 Days (Forecast)",
+        xaxis_title="Date",
+        yaxis_title="Expenses",
+        legend_title="Category",
+        height=500,
+        margin=dict(l=40, r=40, t=60, b=40)
+    )
+    st.plotly_chart(fig_stacked, use_container_width=True)
+
     # Plot forecast for each category with last 30 days of history
     for cat in forecast_df['category'].unique():
         df_plot = forecast_df[forecast_df['category'] == cat]
@@ -308,5 +354,18 @@ if not bt_df.empty:
     bt_df['Subjective Score'] = bt_df['MAPE'].apply(subjective_score)
     st.write("### Backtest KPIs (last 60 days)")
     st.dataframe(bt_df)
+
+# --- Moving average baseline for comparison ---
+st.write("#### Moving Average Baseline (last 30 days)")
+hist_30 = df[df['date'] >= (df['date'].max() - pd.Timedelta(days=30))]
+ma_baseline = hist_30.groupby('date')['amount'].sum().rolling(window=7, min_periods=1).mean()
+st.line_chart(ma_baseline, use_container_width=True)
+
+# --- Warning if Prophet forecast is much higher than moving average ---
+if not forecast_df.empty:
+    forecast_total = forecast_df.groupby('date')['forecast'].sum().mean()
+    ma_total = ma_baseline.mean()
+    if forecast_total > 1.5 * ma_total:
+        st.warning(f"Forecasted daily expenses are much higher than recent 7-day moving average. Please review model results.")
 
 st.info("Forecasts use Prophet with daily/yearly seasonality and country as a regressor. 95% confidence intervals are shown. KPIs are calculated by rolling backtest. Model auto-updates with new data.")
