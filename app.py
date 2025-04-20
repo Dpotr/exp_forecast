@@ -9,6 +9,7 @@ import numpy as np
 import os
 from pandas import ExcelWriter
 import subprocess
+from croston import croston
 
 def add_country_column(df):
     # Define date ranges for each country
@@ -150,81 +151,71 @@ fig_trend.update_layout(
 )
 st.plotly_chart(fig_trend, use_container_width=True)
 
-# --- Hybrid robust forecasting with recurrence detection ---
-forecast_horizon = 7
+# --- Expert demand planning: backtest multiple methods and select best ---
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+
+def rolling_backtest(ts, methods, window=60, forecast_horizon=7):
+    # ts: pandas Series with date index
+    # methods: dict of {name: function}
+    # Returns: {method: error}
+    errors = {name: [] for name in methods}
+    for i in range(window, len(ts) - forecast_horizon + 1):
+        train = ts.iloc[i-window:i]
+        test = ts.iloc[i:i+forecast_horizon]
+        for name, func in methods.items():
+            try:
+                pred = func(train.values, forecast_horizon)
+                err = mean_absolute_error(test.values, pred)
+                errors[name].append(err)
+            except Exception:
+                errors[name].append(np.nan)
+    avg_errors = {name: np.nanmean(errs) for name, errs in errors.items()}
+    return avg_errors
+
 results = []
 forecast_export_rows = []
 category_forecasts = []
+forecast_horizon = 7
 for cat in df['category'].unique():
     df_cat = df[df['category'] == cat].copy()
-    last_30_start = df['date'].max() - pd.Timedelta(days=30)
-    df_cat = df_cat[df_cat['date'] >= last_30_start]
-    nonzero_days = (df_cat['amount'] > 0).sum()
-    recurrence_ratio = nonzero_days / 30
-    mean_30 = df_cat['amount'][df_cat['amount'] > 0].mean() if nonzero_days > 0 else 0
-    median_30 = df_cat['amount'][df_cat['amount'] > 0].median() if nonzero_days > 0 else 0
-    prophet_forecast = None
-    method = ''
-    # --- Recurrence-aware logic ---
-    if recurrence_ratio < 0.2:
-        # Treat as one-off, forecast zero
-        forecast_vals = [0.0] * forecast_horizon
-        method = 'Zero (one-off)'
-    else:
-        # Prophet only if enough data and not too extreme
-        use_prophet = False
-        if nonzero_days >= 5:
-            if len(df_cat) > 10:
-                threshold = df_cat['amount'].quantile(0.99)
-                df_cat = df_cat[df_cat['amount'] <= threshold]
-            df_cat = df_cat.groupby(['date', 'country'], as_index=False)['amount'].sum()
-            df_cat = df_cat.sort_values('date')
-            df_cat['log_amount'] = np.log1p(df_cat['amount'])
-            prophet_df = pd.DataFrame({
-                'ds': df_cat['date'],
-                'y': df_cat['log_amount'],
-                'country': df_cat['country']
-            })
-            prophet_df['country'] = prophet_df['country'].astype(str)
-            if len(prophet_df.dropna()) >= 2:
-                m = Prophet(interval_width=0.95, daily_seasonality=True, yearly_seasonality=True)
-                for c in prophet_df['country'].unique():
-                    m.add_regressor(f"country_{c}")
-                for c in prophet_df['country'].unique():
-                    prophet_df[f"country_{c}"] = (prophet_df['country'] == c).astype(int)
-                m.fit(prophet_df[['ds', 'y'] + [f"country_{c}" for c in prophet_df['country'].unique()]])
-                last_date = df_cat['date'].max()
-                future_dates = pd.date_range(last_date + pd.Timedelta(days=1), periods=forecast_horizon)
-                last_country = df_cat.iloc[-1]['country']
-                future = pd.DataFrame({'ds': future_dates})
-                for c in prophet_df['country'].unique():
-                    future[f"country_{c}"] = int(last_country == c)
-                forecast = m.predict(future)
-                prophet_forecast = [max(np.expm1(y), 0) for y in forecast['yhat']]
-                avg_prophet = np.mean(prophet_forecast)
-                if mean_30 > 0 and 0.5 * mean_30 <= avg_prophet <= 1.5 * mean_30:
-                    use_prophet = True
-                    method = 'Prophet'
-                elif median_30 > 0 and 0.5 * median_30 <= avg_prophet <= 1.5 * median_30:
-                    use_prophet = True
-                    method = 'Prophet'
-        if nonzero_days < 5:
-            forecast_vals = [0.0] * forecast_horizon
-            method = 'Zero (too sparse)'
-        elif use_prophet and prophet_forecast is not None:
-            forecast_vals = prophet_forecast
-            method = 'Prophet'
-        elif mean_30 > 0:
-            forecast_vals = [mean_30] * forecast_horizon
-            method = 'Mean (30d)'
-        elif median_30 > 0:
-            forecast_vals = [median_30] * forecast_horizon
-            method = 'Median (30d)'
-        else:
-            forecast_vals = [0.0] * forecast_horizon
-            method = 'Zero (fallback)'
+    last_90_start = df['date'].max() - pd.Timedelta(days=90)
+    df_cat = df_cat[df_cat['date'] >= last_90_start]
+    # --- Skip if no data for this category ---
+    if df_cat.empty or pd.isna(df_cat['date'].min()) or pd.isna(df_cat['date'].max()):
+        st.warning(f"No data for category '{cat}' in the last 90 days. Skipping forecast.")
+        continue
+    ts = df_cat.groupby('date')['amount'].sum().reindex(pd.date_range(df_cat['date'].min(), df_cat['date'].max()), fill_value=0)
+    # --- Define forecasting methods ---
+    def mean_method(ts, fh): return np.repeat(np.mean(ts[-30:]), fh)
+    def median_method(ts, fh): return np.repeat(np.median(ts[-30:]), fh)
+    def zero_method(ts, fh): return np.zeros(fh)
+    def croston_method(ts, fh): return croston(ts, fh)
+    # Prophet method
+    def prophet_method(ts, fh):
+        import pandas as pd
+        from prophet import Prophet
+        dfp = pd.DataFrame({'ds': ts.index, 'y': ts.values})
+        if len(dfp.dropna()) < 2:
+            return np.zeros(fh)
+        m = Prophet(interval_width=0.95, daily_seasonality=True, yearly_seasonality=True)
+        m.fit(dfp)
+        future = pd.DataFrame({'ds': pd.date_range(dfp['ds'].max() + pd.Timedelta(days=1), periods=fh)})
+        forecast = m.predict(future)
+        return forecast['yhat'].clip(lower=0).values
+    methods = {
+        'mean': mean_method,
+        'median': median_method,
+        'zero': zero_method,
+        'croston': croston_method,
+        'prophet': prophet_method
+    }
+    # --- Backtest and select best method ---
+    avg_errors = rolling_backtest(ts, methods, window=60, forecast_horizon=7)
+    best_method = min(avg_errors, key=avg_errors.get)
+    # --- Forecast with best method ---
+    forecast_vals = methods[best_method](ts.values, forecast_horizon)
     for i in range(forecast_horizon):
-        forecast_date = (df['date'].max() + pd.Timedelta(days=i+1)).date()
+        forecast_date = (ts.index.max() + pd.Timedelta(days=i+1)).date()
         results.append({
             'category': cat,
             'date': forecast_date,
@@ -241,16 +232,12 @@ for cat in df['category'].unique():
         })
     category_forecasts.append({
         'category': cat,
-        'Prophet': np.mean(prophet_forecast) if prophet_forecast is not None else None,
-        'Mean (30d)': mean_30,
-        'Median (30d)': median_30,
-        'Non-zero Days': nonzero_days,
-        'Recurrence Ratio': recurrence_ratio,
-        'Recommended': method
+        'Best Method': best_method,
+        'MAE': avg_errors[best_method],
+        'All MAEs': avg_errors
     })
 
-# --- Show hybrid forecast diagnostics table ---
-st.write('### Forecast Diagnostics Table')
+st.write('### Forecast Diagnostics Table (Expert Backtest Selection)')
 st.dataframe(pd.DataFrame(category_forecasts))
 
 # Show forecast table
