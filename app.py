@@ -10,6 +10,7 @@ import os
 from pandas import ExcelWriter
 import subprocess
 from croston import croston
+from anomaly_utils import detect_outliers, detect_anomaly_transactions, recurring_payments
 
 def add_country_column(df):
     # Define date ranges for each country
@@ -66,6 +67,67 @@ else:
 
 df['date'] = pd.to_datetime(df['date'])
 df = add_country_column(df)
+
+# --- Outlier & Anomaly Detection ---
+st.header("Anomaly & Outlier Detection")
+outlier_days = detect_outliers(df)
+if not outlier_days.empty:
+    st.subheader("Outlier Days (Last 60 Days)")
+    st.dataframe(outlier_days, help="Days with total spending far from the 7-day rolling mean (z-score > 3)")
+else:
+    st.info("No daily outliers detected in the last 60 days.")
+
+anomaly_tx = detect_anomaly_transactions(df)
+if not anomaly_tx.empty:
+    st.subheader("Anomalous Transactions (Last 60 Days)")
+    st.dataframe(anomaly_tx, help="Transactions with unusually high/low amounts for their category (z-score > 3)")
+else:
+    st.info("No anomalous transactions detected in the last 60 days.")
+
+# --- Recurring Payments Detection ---
+st.header("Recurring Payments & Alerts")
+rec_df = recurring_payments(df)
+if not rec_df.empty:
+    st.subheader("Detected Recurring Payments")
+    st.dataframe(rec_df, help="Auto-detected subscriptions/rent with interval and next due date")
+    today = pd.to_datetime(df['date'].max())
+    overdue = rec_df[(today - rec_df['last_date']).dt.days > rec_df['interval_days']]
+    if not overdue.empty:
+        st.warning(f"Some recurring payments may be overdue: {overdue['category'].tolist()}")
+else:
+    st.info("No recurring payments detected.")
+
+# --- Expense Breakdown ---
+st.header("Expense Breakdown & Cumulative Totals")
+# Top categories pie chart
+cat_sum = df.groupby('category')['amount'].sum().sort_values(ascending=False)
+fig_pie = px.pie(cat_sum, values=cat_sum.values, names=cat_sum.index, title="Top Categories (Total)")
+st.plotly_chart(fig_pie, use_container_width=True)
+# Running total
+df_sorted = df.sort_values('date')
+df_sorted['cumulative'] = df_sorted['amount'].cumsum()
+st.line_chart(df_sorted.set_index('date')['cumulative'], use_container_width=True)
+
+# --- Comparisons ---
+st.header("Comparisons & Benchmarks")
+# Month-on-Month comparison
+df['year_month'] = df['date'].dt.to_period('M').astype(str)
+monthly_totals = df.groupby('year_month')['amount'].sum().reset_index()
+st.bar_chart(monthly_totals.set_index('year_month'), use_container_width=True)
+# Week-on-Week comparison
+df['year_week'] = df['date'].dt.strftime('%Y-%U')
+weekly_totals = df.groupby('year_week')['amount'].sum().reset_index()
+st.line_chart(weekly_totals.set_index('year_week'), use_container_width=True)
+
+# --- Export & Sharing ---
+st.header("Export & Sharing")
+if st.button("Download All Data as CSV"):
+    df.to_csv("expenses_export.csv", index=False)
+    st.success("Exported to expenses_export.csv")
+
+# --- User Guidance & Explanations ---
+st.header("User Guidance & Explanations")
+st.info("Hover over any chart or table for tooltips. Outliers/anomalies use z-score > 3. Recurring payments are detected if intervals are regular. Forecast methods are explained in the diagnostics table. For details, see the README.")
 
 # --- Dashboard Layout: Group Boards in Logical Blocks ---
 # 1. Raw Data Preview

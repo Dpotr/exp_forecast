@@ -197,6 +197,16 @@ You can now analyze both weekly and within-month seasonality in your expenses us
   8. Per-Category Forecasts
 - Use the heatmap to spot recurring patterns and the new layout to quickly find the information you need.
 
+## Advanced Insights and Features
+
+- **Anomaly & Outlier Detection:** The dashboard highlights days and transactions that are statistical outliers, helping you spot suspicious or unusual activity quickly.
+- **Forecast Confidence:** Forecast charts now include prediction intervals (upper/lower bounds) where available, and a visual traffic light/score for each forecast based on diagnostics.
+- **Expense Breakdown:** See which categories dominate your spending, and visualize cumulative/running totals for any period.
+- **Recurring Payment Detection:** Automatically detects subscriptions, rent, and other recurring payments, listing their next due date and amount. Alerts you if a recurring payment is overdue or missing.
+- **Comparisons:** Instantly compare current week/month to previous periods, and see budget vs. actuals if budget data is provided.
+- **Export & Sharing:** Download filtered tables/charts as Excel/CSV or images. One-click PDF/HTML summary report.
+- **User Guidance:** Contextual tooltips and explanations are provided for every chart, metric, and anomaly, including why a certain forecast method was chosen.
+
 ## Requirements
 - Python 3.8+
 - See `requirements.txt` for dependencies
