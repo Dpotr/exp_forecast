@@ -6,6 +6,9 @@ import plotly.graph_objects as go
 from prophet import Prophet
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 import numpy as np
+import os
+from pandas import ExcelWriter
+import subprocess
 
 def add_country_column(df):
     # Define date ranges for each country
@@ -27,8 +30,32 @@ def add_country_column(df):
     df['country'] = df['date'].apply(get_country)
     return df
 
+# --- Git auto-update function ---
+def git_auto_update():
+    try:
+        # Get changed files
+        changed = subprocess.check_output(['git', 'status', '--porcelain'], encoding='utf-8')
+        if not changed.strip():
+            st.info("No changes to commit.")
+            return
+        # Short summary
+        changed_files = [line[3:] for line in changed.strip().split('\n') if line]
+        summary = ", ".join(os.path.basename(f) for f in changed_files)
+        commit_msg = f"Auto-update: {summary}"
+        subprocess.check_call(['git', 'add', '.'])
+        subprocess.check_call(['git', 'commit', '-m', commit_msg])
+        subprocess.check_call(['git', 'push'])
+        st.success(f"Changes committed and pushed: {commit_msg}")
+    except Exception as e:
+        st.error(f"Git auto-update failed: {e}")
+
 st.set_page_config(page_title="Expense Forecast Dashboard", layout="wide")
 st.title("Expense Forecast Dashboard")
+
+# --- Streamlit button for git auto-update (always visible) ---
+with st.sidebar:
+    if st.button("Commit & Push to GitHub"):
+        git_auto_update()
 
 uploaded_file = st.file_uploader("Upload your expenses.xlsx file", type=["xlsx"])
 if uploaded_file:
@@ -131,22 +158,27 @@ backtest_results = []
 forecast_horizon = 7
 backtest_window = 60  # days for backtesting
 
+# For Excel export
+forecast_export_rows = []
+
 for cat in df['category'].unique():
+    # --- Aggregate by date ---
     df_cat = df[df['category'] == cat].copy()
+    df_cat = df_cat.groupby(['date', 'country'], as_index=False)['amount'].sum()
     df_cat = df_cat.sort_values('date')
+    # --- Outlier clipping (cap at 99th percentile) ---
+    cap = df_cat['amount'].quantile(0.99)
+    df_cat['amount'] = df_cat['amount'].clip(upper=cap)
     # Prepare for Prophet
     prophet_df = pd.DataFrame({
         'ds': df_cat['date'],
         'y': df_cat['amount'],
         'country': df_cat['country']
     })
-    # Prophet expects string for extra regressors
     prophet_df['country'] = prophet_df['country'].astype(str)
-    # Fit model
     m = Prophet(interval_width=0.95, daily_seasonality=True, yearly_seasonality=True)
     for c in prophet_df['country'].unique():
         m.add_regressor(f"country_{c}")
-    # Add country dummies
     for c in prophet_df['country'].unique():
         prophet_df[f"country_{c}"] = (prophet_df['country'] == c).astype(int)
     m.fit(prophet_df[['ds', 'y'] + [f"country_{c}" for c in prophet_df['country'].unique()]])
@@ -161,6 +193,13 @@ for cat in df['category'].unique():
     # Collect forecast results (clamp to zero)
     for i, row in forecast.iterrows():
         results.append({
+            'category': cat,
+            'date': row['ds'].date(),
+            'forecast': max(row['yhat'], 0),
+            'lower': max(row['yhat_lower'], 0),
+            'upper': max(row['yhat_upper'], 0)
+        })
+        forecast_export_rows.append({
             'category': cat,
             'date': row['ds'].date(),
             'forecast': max(row['yhat'], 0),
@@ -212,6 +251,14 @@ for cat in df['category'].unique():
 
 # Show forecast table
 forecast_df = pd.DataFrame(results)
+# --- Export forecast to Excel ---
+if not forecast_df.empty:
+    export_df = pd.DataFrame(forecast_export_rows)
+    export_path = os.path.join(os.path.dirname(__file__), 'forecast_results.xlsx')
+    with ExcelWriter(export_path, engine='openpyxl') as writer:
+        export_df.to_excel(writer, index=False)
+    st.success(f"Forecast results exported to {export_path}")
+
 if not forecast_df.empty:
     st.write("### 7-Day Forecast by Category")
     st.dataframe(forecast_df)
@@ -221,10 +268,16 @@ if not forecast_df.empty:
     total_sum = total_forecast['forecast'].sum()
     st.metric(label="Total Forecasted Expenses (7 days)", value=f"{total_sum:.2f}")
     st.dataframe(total_forecast.rename(columns={"forecast": "Total Forecast"}))
-    # Plot forecast for each category
+    # Plot forecast for each category with last 30 days of history
     for cat in forecast_df['category'].unique():
         df_plot = forecast_df[forecast_df['category'] == cat]
+        # Last 30 days of actuals
+        df_cat_hist = df[(df['category'] == cat) & (df['date'] >= (df['date'].max() - pd.Timedelta(days=30)))]
+        df_cat_hist = df_cat_hist.groupby('date')['amount'].sum().reset_index()
         fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=df_cat_hist['date'], y=df_cat_hist['amount'], name='Actual (last 30d)', marker_color='gray', opacity=0.5
+        ))
         fig.add_trace(go.Scatter(
             x=df_plot['date'], y=df_plot['forecast'], mode='lines+markers', name='Forecast',
             line=dict(color='royalblue')
@@ -237,7 +290,7 @@ if not forecast_df.empty:
             x=df_plot['date'], y=df_plot['lower'], mode='lines', name='Lower 95%',
             fill='tonexty', fillcolor='rgba(0,0,255,0.1)', line=dict(width=0), showlegend=True
         ))
-        fig.update_layout(title=f"Forecast for {cat}", xaxis_title="Date", yaxis_title="Amount", height=350)
+        fig.update_layout(title=f"Forecast for {cat} (with last 30d history)", xaxis_title="Date", yaxis_title="Amount", height=350)
         st.plotly_chart(fig, use_container_width=True)
 
 # Show backtest KPIs with subjective scoring
