@@ -67,14 +67,33 @@ else:
 df['date'] = pd.to_datetime(df['date'])
 df = add_country_column(df)
 
+# --- Dashboard Layout: Group Boards in Logical Blocks ---
+# 1. Raw Data Preview
+st.header("Raw Data")
 st.subheader("Raw Data Preview")
 st.dataframe(df.head(20))
 
+# --- Seasonality Heatmap ---
+st.subheader("Average Spending by Day of Week and Day of Month (Last 60 Days)")
+last_60 = df[df['date'] >= (df['date'].max() - pd.Timedelta(days=60))]
+last_60['weekday'] = last_60['date'].dt.day_name()
+last_60['dom'] = last_60['date'].dt.day
+pivot = last_60.pivot_table(index='weekday', columns='dom', values='amount', aggfunc='mean', fill_value=0)
+# Reorder weekdays
+weekday_order = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
+pivot = pivot.reindex(weekday_order)
+import plotly.express as px
+fig_heat = px.imshow(pivot.values, labels=dict(x="Day of Month", y="Day of Week", color="Avg Amount"),
+                     x=pivot.columns, y=pivot.index, aspect="auto", color_continuous_scale='Viridis')
+fig_heat.update_layout(title="Expense Seasonality Heatmap (Last 60 Days)", height=350)
+st.plotly_chart(fig_heat, use_container_width=True)
+
+# 2. Monthly Summary & Country Regimes
+st.header("Monthly Expenses")
 st.subheader("Expenses by Category and Country")
 agg = df.groupby(['country', 'category'])['amount'].sum().reset_index()
 st.dataframe(agg)
 
-# --- Monthly stacked bar chart by category with country highlights ---
 df['year_month'] = df['date'].dt.to_period('M').astype(str)
 monthly = df.groupby(['year_month', 'category', 'country'])['amount'].sum().reset_index()
 # Pivot for stacked bar
@@ -122,7 +141,8 @@ fig.update_layout(
 st.subheader("Monthly Expenses by Category (Stacked)")
 st.plotly_chart(fig, use_container_width=True)
 
-# --- Last 90 Days with Trendline ---
+# 3. Last 90 Days with Trendline
+st.header("Trendline")
 st.subheader("Expenses: Last 90 Days (with Trendline)")
 last_90 = df[df['date'] >= (df['date'].max() - pd.Timedelta(days=90))]
 daily = last_90.groupby('date')['amount'].sum().reset_index()
@@ -151,7 +171,8 @@ fig_trend.update_layout(
 )
 st.plotly_chart(fig_trend, use_container_width=True)
 
-# --- Expert demand planning: backtest multiple methods and select best ---
+# 4. Forecast Diagnostics Table
+st.header("Diagnostics")
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
 def rolling_backtest(ts, methods, window=60, forecast_horizon=7):
@@ -389,83 +410,62 @@ for cat in df['category'].unique():
         'Explanation': explanation
     })
 
-# --- Show forecast diagnostics table with explanations ---
+st.subheader("Forecast Diagnostics Table")
 df_diag = pd.DataFrame(category_forecasts)
-st.write('### Forecast Diagnostics Table (Expert Backtest Selection)')
 st.dataframe(df_diag)
-
-# --- Show subjective scoring and explanations ---
 for idx, row in df_diag.iterrows():
     st.write(f"**{row['category']}**: {row['Score']} — {row['Explanation']}")
 
-# Show forecast table
+# 5. Forecast Table & Summary
+st.header("Forecast")
+st.subheader("15-Day Forecast by Category")
 forecast_df = pd.DataFrame(results)
-# --- Export forecast to Excel ---
-if not forecast_df.empty:
-    export_df = pd.DataFrame(forecast_export_rows)
-    export_path = os.path.join(os.path.dirname(__file__), 'forecast_results.xlsx')
-    with ExcelWriter(export_path, engine='openpyxl') as writer:
-        export_df.to_excel(writer, index=False)
-    st.success(f"Forecast results exported to {export_path}")
+st.dataframe(forecast_df)
+st.subheader("Total Forecast Summary (All Categories)")
+total_forecast = forecast_df.groupby('date')['forecast'].sum().reset_index()
+total_sum = total_forecast['forecast'].sum()
+st.dataframe(total_forecast.rename(columns={"forecast": "Total Forecast"}))
+st.metric(label="Total Forecasted Expenses (15 days)", value=f"{total_sum:.2f}")
 
-if not forecast_df.empty:
-    st.write("### 15-Day Forecast by Category")
-    st.dataframe(forecast_df)
-    # --- Total Forecast Summary Board ---
-    st.write("#### Total Forecast Summary (All Categories)")
-    total_forecast = forecast_df.groupby('date')['forecast'].sum().reset_index()
-    total_sum = total_forecast['forecast'].sum()
-    st.metric(label="Total Forecasted Expenses (15 days)", value=f"{total_sum:.2f}")
-    st.dataframe(total_forecast.rename(columns={"forecast": "Total Forecast"}))
+# 6. Stacked Column Chart: History + Forecast
+st.header("Stacked Chart")
+st.subheader("Stacked Column Chart: 30 Days History + 15 Days Forecast")
+# Prepare historical data (last 30 days)
+last_30 = df[df['date'] >= (df['date'].max() - pd.Timedelta(days=30))]
+hist_pivot = last_30.groupby(['date', 'category'])['amount'].sum().reset_index()
+hist_pivot = hist_pivot.pivot(index='date', columns='category', values='amount').fillna(0)
+# Combine history and forecast
+combined = pd.concat([hist_pivot, forecast_df.pivot(index='date', columns='category', values='forecast').fillna(0)], axis=0)
+# Plot
+fig_stacked = go.Figure()
+for cat in combined.columns:
+    fig_stacked.add_trace(go.Bar(
+        x=combined.index,
+        y=combined[cat],
+        name=cat
+    ))
+fig_stacked.update_layout(
+    barmode='stack',
+    title="Expenses: Last 30 Days (Actual) + Next 15 Days (Forecast)",
+    xaxis_title="Date",
+    yaxis_title="Expenses",
+    legend_title="Category",
+    height=500,
+    margin=dict(l=40, r=40, t=60, b=40)
+)
+st.plotly_chart(fig_stacked, use_container_width=True)
 
-    # --- Table: 15-day forecast by day/category ---
-    st.write("#### Forecast Table: Next 15 Days by Category")
-    forecast_pivot = forecast_df.pivot(index='date', columns='category', values='forecast').fillna(0)
-    st.dataframe(forecast_pivot.style.format("{:.2f}"))
-
-    # --- Stacked column chart: 30 days history + 15 days forecast ---
-    st.write("#### Stacked Column Chart: 30 Days History + 15 Days Forecast")
-    # Prepare historical data (last 30 days)
-    last_30 = df[df['date'] >= (df['date'].max() - pd.Timedelta(days=30))]
-    hist_pivot = last_30.groupby(['date', 'category'])['amount'].sum().reset_index()
-    hist_pivot = hist_pivot.pivot(index='date', columns='category', values='amount').fillna(0)
-    # Combine history and forecast
-    combined = pd.concat([hist_pivot, forecast_pivot], axis=0)
-    # Plot
-    fig_stacked = go.Figure()
-    for cat in combined.columns:
-        fig_stacked.add_trace(go.Bar(
-            x=combined.index,
-            y=combined[cat],
-            name=cat
-        ))
-    fig_stacked.update_layout(
-        barmode='stack',
-        title="Expenses: Last 30 Days (Actual) + Next 15 Days (Forecast)",
-        xaxis_title="Date",
-        yaxis_title="Expenses",
-        legend_title="Category",
-        height=500,
-        margin=dict(l=40, r=40, t=60, b=40)
-    )
-    st.plotly_chart(fig_stacked, use_container_width=True)
-
-    # Plot forecast for each category with last 30 days of history
-    for cat in forecast_df['category'].unique():
-        df_plot = forecast_df[forecast_df['category'] == cat]
-        # Last 30 days of actuals
-        df_cat_hist = df[(df['category'] == cat) & (df['date'] >= (df['date'].max() - pd.Timedelta(days=30)))]
-        df_cat_hist = df_cat_hist.groupby('date')['amount'].sum().reset_index()
-        fig = go.Figure()
-        fig.add_trace(go.Bar(
-            x=df_cat_hist['date'], y=df_cat_hist['amount'], name='Actual (last 30d)', marker_color='gray', opacity=0.5
-        ))
-        fig.add_trace(go.Scatter(
-            x=df_plot['date'], y=df_plot['forecast'], mode='lines+markers', name='Forecast',
-            line=dict(color='royalblue')
-        ))
-        fig.update_layout(title=f"Forecast for {cat} (with last 30d history)", xaxis_title="Date", yaxis_title="Amount", height=350)
-        st.plotly_chart(fig, use_container_width=True)
+# 7. Forecast for Each Category
+st.header("Per-Category Forecasts")
+for cat in forecast_df['category'].unique():
+    df_plot = forecast_df[forecast_df['category'] == cat]
+    df_cat_hist = df[(df['category'] == cat) & (df['date'] >= (df['date'].max() - pd.Timedelta(days=30)))]
+    df_cat_hist = df_cat_hist.groupby('date')['amount'].sum().reset_index()
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=df_cat_hist['date'], y=df_cat_hist['amount'], name='Actual (last 30d)', marker_color='gray', opacity=0.5))
+    fig.add_trace(go.Scatter(x=df_plot['date'], y=df_plot['forecast'], mode='lines+markers', name='Forecast', line=dict(color='royalblue')))
+    fig.update_layout(title=f"Forecast for {cat} (with last 30d history)", xaxis_title="Date", yaxis_title="Amount", height=350)
+    st.plotly_chart(fig, use_container_width=True)
 
 # --- Moving average baseline for comparison ---
 st.write("#### Moving Average Baseline (last 30 days)")
@@ -481,3 +481,11 @@ if not forecast_df.empty:
         st.warning(f"Forecasted daily expenses are much higher than recent 7-day moving average. Please review model results.")
 
 st.info("Forecasts use a hybrid robust approach: Prophet is used if enough data and its forecast is not extreme; otherwise, mean, median, or zero is used. 95% confidence intervals are not shown. Model auto-updates with new data.")
+
+# --- Export forecast to Excel ---
+if not forecast_df.empty:
+    export_df = pd.DataFrame(forecast_export_rows)
+    export_path = os.path.join(os.path.dirname(__file__), 'forecast_results.xlsx')
+    with ExcelWriter(export_path, engine='openpyxl') as writer:
+        export_df.to_excel(writer, index=False)
+    st.success(f"Forecast results exported to {export_path}")

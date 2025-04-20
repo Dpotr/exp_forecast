@@ -183,6 +183,20 @@ You can now analyze both weekly and within-month seasonality in your expenses us
 - These diagnostics help you see patterns like higher weekend spending or spikes around payday/rent.
 - Use these insights to make your forecasts more life-like and confident!
 
+## Seasonality Heatmap & Dashboard Layout
+
+- The dashboard now includes a **Seasonality Heatmap** showing average spending by day of week and day of month (last 60 days). This gives you instant insight into both weekly and within-month patterns in your expenses.
+- All dashboard boards/sections are grouped into logical blocks with clear headers for easier navigation:
+  1. Raw Data
+  2. Seasonality Insights (Heatmap)
+  3. Monthly Summary & Country Regimes
+  4. Trendline (Last 90 Days)
+  5. Forecast Diagnostics Table
+  6. Forecast Table & Summary
+  7. Stacked Chart (History + Forecast)
+  8. Per-Category Forecasts
+- Use the heatmap to spot recurring patterns and the new layout to quickly find the information you need.
+
 ## Requirements
 - Python 3.8+
 - See `requirements.txt` for dependencies
