@@ -68,19 +68,39 @@ else:
 df['date'] = pd.to_datetime(df['date'])
 df = add_country_column(df)
 
+# --- Category Filtering ---
+st.sidebar.header("Category Filter")
+all_categories = sorted(df['category'].unique())
+def_select = all_categories if 'selected_categories' not in st.session_state else st.session_state['selected_categories']
+select_all = st.sidebar.button("Select All Categories")
+deselect_all = st.sidebar.button("Deselect All Categories")
+if select_all:
+    selected_categories = all_categories
+elif deselect_all:
+    selected_categories = []
+else:
+    selected_categories = st.sidebar.multiselect("Choose categories to show:", all_categories, default=def_select)
+st.session_state['selected_categories'] = selected_categories
+if selected_categories:
+    df = df[df['category'].isin(selected_categories)]
+else:
+    st.warning("No categories selected. Showing empty dashboard.")
+
 # --- Outlier & Anomaly Detection ---
 st.header("Anomaly & Outlier Detection")
 outlier_days = detect_outliers(df)
 if not outlier_days.empty:
     st.subheader("Outlier Days (Last 60 Days)")
-    st.dataframe(outlier_days, help="Days with total spending far from the 7-day rolling mean (z-score > 3)")
+    st.caption("Days with total spending far from the 7-day rolling mean (z-score > 3)")
+    st.dataframe(outlier_days)
 else:
     st.info("No daily outliers detected in the last 60 days.")
 
 anomaly_tx = detect_anomaly_transactions(df)
 if not anomaly_tx.empty:
     st.subheader("Anomalous Transactions (Last 60 Days)")
-    st.dataframe(anomaly_tx, help="Transactions with unusually high/low amounts for their category (z-score > 3)")
+    st.caption("Transactions with unusually high/low amounts for their category (z-score > 3)")
+    st.dataframe(anomaly_tx)
 else:
     st.info("No anomalous transactions detected in the last 60 days.")
 
@@ -89,7 +109,8 @@ st.header("Recurring Payments & Alerts")
 rec_df = recurring_payments(df)
 if not rec_df.empty:
     st.subheader("Detected Recurring Payments")
-    st.dataframe(rec_df, help="Auto-detected subscriptions/rent with interval and next due date")
+    st.caption("Auto-detected subscriptions/rent with interval and next due date")
+    st.dataframe(rec_df)
     today = pd.to_datetime(df['date'].max())
     overdue = rec_df[(today - rec_df['last_date']).dt.days > rec_df['interval_days']]
     if not overdue.empty:
@@ -133,6 +154,7 @@ st.info("Hover over any chart or table for tooltips. Outliers/anomalies use z-sc
 # 1. Raw Data Preview
 st.header("Raw Data")
 st.subheader("Raw Data Preview")
+st.caption("First 20 rows of the raw data")
 st.dataframe(df.head(20))
 
 # --- Seasonality Heatmap ---
@@ -154,6 +176,7 @@ st.plotly_chart(fig_heat, use_container_width=True)
 st.header("Monthly Expenses")
 st.subheader("Expenses by Category and Country")
 agg = df.groupby(['country', 'category'])['amount'].sum().reset_index()
+st.caption("Total expenses by category and country")
 st.dataframe(agg)
 
 df['year_month'] = df['date'].dt.to_period('M').astype(str)
@@ -473,6 +496,7 @@ for cat in df['category'].unique():
     })
 
 st.subheader("Forecast Diagnostics Table")
+st.caption("Forecast performance metrics for each category")
 df_diag = pd.DataFrame(category_forecasts)
 st.dataframe(df_diag)
 for idx, row in df_diag.iterrows():
@@ -482,10 +506,12 @@ for idx, row in df_diag.iterrows():
 st.header("Forecast")
 st.subheader("15-Day Forecast by Category")
 forecast_df = pd.DataFrame(results)
+st.caption("Forecasted expenses for the next 15 days, by category")
 st.dataframe(forecast_df)
 st.subheader("Total Forecast Summary (All Categories)")
 total_forecast = forecast_df.groupby('date')['forecast'].sum().reset_index()
 total_sum = total_forecast['forecast'].sum()
+st.caption("Total forecasted expenses for the next 15 days")
 st.dataframe(total_forecast.rename(columns={"forecast": "Total Forecast"}))
 st.metric(label="Total Forecasted Expenses (15 days)", value=f"{total_sum:.2f}")
 
