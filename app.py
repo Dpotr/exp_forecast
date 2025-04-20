@@ -194,14 +194,14 @@ def subjective_score(mape, tsignal):
     else:
         return 'Poor', 'Forecast is unreliable or highly biased.'
 
-# --- Streamlit sidebar: adjustable activity window ---
+# --- Streamlit sidebar: adjustable activity window and forecast horizon ---
 st.sidebar.header("Forecast Settings")
 activity_window = st.sidebar.slider("Recent activity window (days)", min_value=7, max_value=90, value=30, step=1)
+forecast_horizon = st.sidebar.slider("Forecast horizon (days)", min_value=7, max_value=30, value=15, step=1)
 
 results = []
 forecast_export_rows = []
 category_forecasts = []
-forecast_horizon = 7
 for cat in df['category'].unique():
     df_cat = df[df['category'] == cat].copy()
     last_90_start = df['date'].max() - pd.Timedelta(days=90)
@@ -231,31 +231,102 @@ for cat in df['category'].unique():
         future = pd.DataFrame({'ds': pd.date_range(df['date'].max() + pd.Timedelta(days=1), periods=fh)})
         forecast = m.predict(future)
         return forecast['yhat'].clip(lower=0).values
+    def periodic_spike_method(ts, fh, category=None):
+        # Robust spike forecast for periodic categories, tolerant of small delays
+        import numpy as np
+        import pandas as pd
+        from pandas import Series
+        ts = Series(ts)
+        spike_thresholds = {
+            'school': 300,
+            'rent + communal': 500,
+            'car rent': 300
+        }
+        cat_lower = (category or '').lower() if category else ''
+        threshold = 0
+        for key, val in spike_thresholds.items():
+            if key in cat_lower:
+                threshold = val
+                break
+        if threshold:
+            nonzero = ts[ts > threshold]
+        else:
+            nonzero = ts[ts > 0]
+        if len(nonzero) < 2:
+            return np.zeros(fh)
+        spike_idxs = nonzero.index
+        if not isinstance(spike_idxs[0], (pd.Timestamp, pd.DatetimeIndex, pd.Period)):
+            intervals = np.diff(spike_idxs)
+            if len(intervals) == 0:
+                return np.zeros(fh)
+            median_interval = int(np.median(intervals))
+            last_spike_idx = spike_idxs[-1]
+            spike_value = nonzero.iloc[-1]
+            forecast = np.zeros(fh)
+            next_spike = last_spike_idx + median_interval
+            # Place spike at first day if next_spike is just before window (tolerance 3 days)
+            if next_spike - len(ts) < 0 and abs(next_spike - len(ts)) <= 3:
+                forecast[0] = spike_value
+            elif 0 <= next_spike - len(ts) < fh:
+                forecast[next_spike - len(ts)] = spike_value
+            return forecast
+        # Datetime index logic
+        spike_dates = pd.to_datetime(spike_idxs)
+        intervals = (spike_dates[1:] - spike_dates[:-1]).days
+        if len(intervals) == 0:
+            return np.zeros(fh)
+        median_interval = int(np.median(intervals))
+        last_spike_date = spike_dates[-1]
+        spike_value = nonzero.iloc[-1]
+        forecast = np.zeros(fh)
+        forecast_start_date = ts.index[-1] + pd.Timedelta(days=1)
+        next_spike_date = last_spike_date + pd.Timedelta(days=median_interval)
+        offset = (next_spike_date - forecast_start_date).days
+        # Place spike at first day if next_spike_date is just before window (tolerance 3 days)
+        if offset < 0 and abs(offset) <= 3:
+            forecast[0] = spike_value
+        elif 0 <= offset < fh:
+            forecast[offset] = spike_value
+        return forecast
+
     methods = {
         'mean': mean_method,
         'median': median_method,
         'zero': zero_method,
         'croston': croston_method,
-        'prophet': prophet_method
+        'prophet': prophet_method,
+        'periodic_spike': lambda ts, fh: periodic_spike_method(ts, fh, category=cat)
     }
     # --- Backtest and select best method ---
-    avg_errors = rolling_backtest(ts, methods, window=60, forecast_horizon=7)
-    best_method = min(avg_errors, key=avg_errors.get)
+    avg_errors = rolling_backtest(ts, methods, window=60, forecast_horizon=forecast_horizon)
+    nonzero_days = (ts > 0).sum()
+    # --- Special rule: if category is school, rent + communal, or car rent, force periodic_spike ---
+    spike_cats = ['school', 'rent + communal', 'car rent']
+    if any(key in cat.lower() for key in spike_cats):
+        best_method = 'periodic_spike'
+    elif nonzero_days <= 2:
+        best_method = 'periodic_spike'
+    else:
+        best_method = min(avg_errors, key=avg_errors.get)
     # --- Forecast with best method only if active ---
     if forecast_active:
         forecast_vals = methods[best_method](ts.values, forecast_horizon)
         # --- Tracking signals for best method ---
         # Use last 60 days for backtest tracking signals
-        if len(ts) > 67:
-            y_true = ts[-7:]
-            y_pred = methods[best_method](ts[:-7], 7)
+        if len(ts) > (forecast_horizon + 60):
+            y_true = ts[-forecast_horizon:]
+            y_pred = methods[best_method](ts[:-forecast_horizon], forecast_horizon)
         else:
-            y_true = ts[-7:]
+            y_true = ts[-forecast_horizon:]
             y_pred = forecast_vals
+        # Ensure y_true and y_pred are the same length
+        min_len = min(len(y_true), len(y_pred))
+        y_true = y_true[-min_len:]
+        y_pred = y_pred[-min_len:]
         signals = tracking_signals(y_true, y_pred)
         score, explanation = subjective_score(signals['MAPE'], signals['Tracking Signal'])
         for i in range(forecast_horizon):
-            forecast_date = (df['date'].max() + pd.Timedelta(days=i+1)).date()
+            forecast_date = ts.index[-1] + pd.Timedelta(days=i+1)
             results.append({
                 'category': cat,
                 'date': forecast_date,
@@ -270,6 +341,12 @@ for cat in df['category'].unique():
                 'lower': None,
                 'upper': None
             })
+        # --- Next expected spike info box ---
+        if best_method == 'periodic_spike' and np.any(forecast_vals > 0):
+            next_spike_idx = np.argmax(forecast_vals > 0)
+            next_spike_date = ts.index[-1] + pd.Timedelta(days=next_spike_idx+1)
+            next_spike_value = forecast_vals[next_spike_idx]
+            st.info(f"Next expected spike for '{cat}': {next_spike_date.date()} — {next_spike_value:.2f}")
     else:
         signals = {'MAE': None, 'MAPE': None, 'Bias': None, 'Tracking Signal': None}
         score, explanation = 'Inactive', 'No recent activity. Forecast skipped.'
@@ -307,22 +384,22 @@ if not forecast_df.empty:
     st.success(f"Forecast results exported to {export_path}")
 
 if not forecast_df.empty:
-    st.write("### 7-Day Forecast by Category")
+    st.write("### 15-Day Forecast by Category")
     st.dataframe(forecast_df)
     # --- Total Forecast Summary Board ---
     st.write("#### Total Forecast Summary (All Categories)")
     total_forecast = forecast_df.groupby('date')['forecast'].sum().reset_index()
     total_sum = total_forecast['forecast'].sum()
-    st.metric(label="Total Forecasted Expenses (7 days)", value=f"{total_sum:.2f}")
+    st.metric(label="Total Forecasted Expenses (15 days)", value=f"{total_sum:.2f}")
     st.dataframe(total_forecast.rename(columns={"forecast": "Total Forecast"}))
 
-    # --- Table: 7-day forecast by day/category ---
-    st.write("#### Forecast Table: Next 7 Days by Category")
+    # --- Table: 15-day forecast by day/category ---
+    st.write("#### Forecast Table: Next 15 Days by Category")
     forecast_pivot = forecast_df.pivot(index='date', columns='category', values='forecast').fillna(0)
     st.dataframe(forecast_pivot.style.format("{:.2f}"))
 
-    # --- Stacked column chart: 30 days history + 7 days forecast ---
-    st.write("#### Stacked Column Chart: 30 Days History + 7 Days Forecast")
+    # --- Stacked column chart: 30 days history + 15 days forecast ---
+    st.write("#### Stacked Column Chart: 30 Days History + 15 Days Forecast")
     # Prepare historical data (last 30 days)
     last_30 = df[df['date'] >= (df['date'].max() - pd.Timedelta(days=30))]
     hist_pivot = last_30.groupby(['date', 'category'])['amount'].sum().reset_index()
@@ -339,7 +416,7 @@ if not forecast_df.empty:
         ))
     fig_stacked.update_layout(
         barmode='stack',
-        title="Expenses: Last 30 Days (Actual) + Next 7 Days (Forecast)",
+        title="Expenses: Last 30 Days (Actual) + Next 15 Days (Forecast)",
         xaxis_title="Date",
         yaxis_title="Expenses",
         legend_title="Category",
