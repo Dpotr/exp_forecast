@@ -127,6 +127,22 @@ Suppose you have the following expenses in the last 30 days:
 - In this tool, MAE (Mean Absolute Error) is used as a simple tracking signal: the lower the MAE, the better the forecast matches reality.
 - If you see a high MAE, consider changing the activity window or reviewing your data for outliers.
 
+## Robust Periodic Spike Forecasting
+
+### What’s New
+- The dashboard now robustly forecasts regular, lumpy, high-value expenses (like rent, school, car rent) even if the payment is slightly late or early.
+- If the next expected spike is just before or at the start of the forecast window, the spike will appear at the first day of the window—no more missed rent or car payments due to real-world timing delays!
+- Category-specific spike thresholds ensure only true spikes are forecasted (e.g., rent + communal >500, school >300, car rent >300).
+- The dashboard info box will always show the next expected spike date and amount for these categories.
+
+### How it works
+- For categories like `rent + communal`, `school`, and `car rent`, the system:
+  - Detects the last two true spikes (above threshold)
+  - Calculates the typical interval between them
+  - Predicts the next spike date
+  - If the spike is due or slightly overdue (within 3 days of the forecast window), it is forecasted at the start of the window
+- This makes your forecast robust against real-life payment delays and ensures you never miss a major recurring expense in your plan.
+
 ## Automated Expenses Updater
 
 ### What it does
