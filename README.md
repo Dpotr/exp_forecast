@@ -11,8 +11,11 @@ This project is an interactive web dashboard for forecasting categorized expense
 
 ## Usage
 1. Place your historical expenses in `expenses.xlsx` (columns: `date`, `category`, `amount`).
-2. Run the dashboard: `streamlit run app.py`
-3. Explore raw data, monthly summaries, forecasts, and backtest KPIs in the browser.
+2. Run the dashboard locally: `streamlit run app.py`
+3. Or, use the live online dashboard (if deployed via [streamlit.io](https://streamlit.io)):
+   - The dashboard will automatically update online after each push to the GitHub repository.
+   - Simply update your code, commit, and push to GitHub. The online dashboard will reflect the latest changes after a short delay.
+4. Explore raw data, monthly summaries, forecasts, and backtest KPIs in the browser.
 
 ## Requirements
 - Python 3.8+
