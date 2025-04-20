@@ -94,6 +94,35 @@ fig.update_layout(
 st.subheader("Monthly Expenses by Category (Stacked)")
 st.plotly_chart(fig, use_container_width=True)
 
+# --- Last 90 Days with Trendline ---
+st.subheader("Expenses: Last 90 Days (with Trendline)")
+last_90 = df[df['date'] >= (df['date'].max() - pd.Timedelta(days=90))]
+daily = last_90.groupby('date')['amount'].sum().reset_index()
+
+# Calculate moving average as trendline
+window = 7  # 7-day moving average
+if len(daily) >= window:
+    daily['trend'] = daily['amount'].rolling(window=window, min_periods=1).mean()
+else:
+    daily['trend'] = daily['amount']
+
+fig_trend = go.Figure()
+fig_trend.add_trace(go.Bar(
+    x=daily['date'], y=daily['amount'], name='Daily Expenses', marker_color='lightblue'
+))
+fig_trend.add_trace(go.Scatter(
+    x=daily['date'], y=daily['trend'], name=f'{window}-Day Moving Avg', line=dict(color='red', width=2)
+))
+fig_trend.update_layout(
+    title="Last 90 Days Expenses with Trendline",
+    xaxis_title="Date",
+    yaxis_title="Total Expenses",
+    legend_title="Legend",
+    height=400,
+    margin=dict(l=40, r=40, t=60, b=40)
+)
+st.plotly_chart(fig_trend, use_container_width=True)
+
 # --- Forecasting, Backtesting, KPI Tracking ---
 st.subheader("Expense Forecasts by Category (7-day horizon)")
 
@@ -127,16 +156,16 @@ for cat in df['category'].unique():
     last_country = df_cat.iloc[-1]['country']
     future = pd.DataFrame({'ds': future_dates})
     for c in prophet_df['country'].unique():
-        future[f"country_{c}"] = (last_country == c).astype(int)
+        future[f"country_{c}"] = int(last_country == c)
     forecast = m.predict(future)
-    # Collect forecast results
+    # Collect forecast results (clamp to zero)
     for i, row in forecast.iterrows():
         results.append({
             'category': cat,
             'date': row['ds'].date(),
-            'forecast': row['yhat'],
-            'lower': row['yhat_lower'],
-            'upper': row['yhat_upper']
+            'forecast': max(row['yhat'], 0),
+            'lower': max(row['yhat_lower'], 0),
+            'upper': max(row['yhat_upper'], 0)
         })
     # --- Backtesting ---
     # Use last N days for backtest
@@ -165,7 +194,7 @@ for cat in df['category'].unique():
             future_bt = pd.DataFrame({'ds': [d]})
             last_country_bt = train_bt.iloc[-1]['country']
             for c in bt_prophet_df['country'].unique():
-                future_bt[f"country_{c}"] = (last_country_bt == c).astype(int)
+                future_bt[f"country_{c}"] = int(last_country_bt == c)
             pred_bt = m_bt.predict(future_bt)
             actuals.append(test_bt['amount'].sum())
             preds.append(pred_bt['yhat'].iloc[0])
@@ -186,6 +215,12 @@ forecast_df = pd.DataFrame(results)
 if not forecast_df.empty:
     st.write("### 7-Day Forecast by Category")
     st.dataframe(forecast_df)
+    # --- Total Forecast Summary Board ---
+    st.write("#### Total Forecast Summary (All Categories)")
+    total_forecast = forecast_df.groupby('date')['forecast'].sum().reset_index()
+    total_sum = total_forecast['forecast'].sum()
+    st.metric(label="Total Forecasted Expenses (7 days)", value=f"{total_sum:.2f}")
+    st.dataframe(total_forecast.rename(columns={"forecast": "Total Forecast"}))
     # Plot forecast for each category
     for cat in forecast_df['category'].unique():
         df_plot = forecast_df[forecast_df['category'] == cat]
@@ -205,9 +240,19 @@ if not forecast_df.empty:
         fig.update_layout(title=f"Forecast for {cat}", xaxis_title="Date", yaxis_title="Amount", height=350)
         st.plotly_chart(fig, use_container_width=True)
 
-# Show backtest KPIs
+# Show backtest KPIs with subjective scoring
 bt_df = pd.DataFrame(backtest_results)
+def subjective_score(mape):
+    if mape < 10:
+        return "Excellent"
+    elif mape < 20:
+        return "Good"
+    elif mape < 35:
+        return "Acceptable"
+    else:
+        return "Poor"
 if not bt_df.empty:
+    bt_df['Subjective Score'] = bt_df['MAPE'].apply(subjective_score)
     st.write("### Backtest KPIs (last 60 days)")
     st.dataframe(bt_df)
 
