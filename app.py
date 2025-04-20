@@ -359,7 +359,7 @@ for cat in df['category'].unique():
             return np.zeros(fh)
         m = Prophet(interval_width=0.95, daily_seasonality=True, yearly_seasonality=True)
         m.fit(dfp)
-        future = pd.DataFrame({'ds': pd.date_range(df['date'].max() + pd.Timedelta(days=1), periods=fh)})
+        future = pd.DataFrame({'ds': pd.date_range(ts.index[-1] + pd.Timedelta(days=1), periods=fh)})
         forecast = m.predict(future)
         return forecast['yhat'].clip(lower=0).values
     def periodic_spike_method(ts, fh, category=None):
@@ -461,23 +461,13 @@ for cat in df['category'].unique():
             results.append({
                 'category': cat,
                 'date': forecast_date,
-                'forecast': forecast_vals[i],
-                'lower': None,
-                'upper': None
+                'forecast': forecast_vals[i]
             })
             forecast_export_rows.append({
                 'category': cat,
                 'date': forecast_date,
-                'forecast': forecast_vals[i],
-                'lower': None,
-                'upper': None
+                'forecast': forecast_vals[i]
             })
-        # --- Next expected spike info box ---
-        if best_method == 'periodic_spike' and np.any(forecast_vals > 0):
-            next_spike_idx = np.argmax(forecast_vals > 0)
-            next_spike_date = ts.index[-1] + pd.Timedelta(days=next_spike_idx+1)
-            next_spike_value = forecast_vals[next_spike_idx]
-            st.info(f"Next expected spike for '{cat}': {next_spike_date.date()} — {next_spike_value:.2f}")
     else:
         signals = {'MAE': None, 'MAPE': None, 'Bias': None, 'Tracking Signal': None}
         score, explanation = 'Inactive', 'No recent activity. Forecast skipped.'
@@ -499,8 +489,6 @@ st.subheader("Forecast Diagnostics Table")
 st.caption("Forecast performance metrics for each category")
 df_diag = pd.DataFrame(category_forecasts)
 st.dataframe(df_diag)
-for idx, row in df_diag.iterrows():
-    st.write(f"**{row['category']}**: {row['Score']} — {row['Explanation']}")
 
 # 5. Forecast Table & Summary
 st.header("Forecast")

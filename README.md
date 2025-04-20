@@ -221,4 +221,11 @@ GitHub: [https://github.com/Dpotr/exp_forecast](https://github.com/Dpotr/exp_for
 
 ---
 
+**Note (April 2025):**
+- The dashboard and forecast exports now show only the main forecast value for each day/category.
+- Lower/upper confidence intervals are no longer included, as they were not consistently available or meaningful for all methods.
+- This change simplifies the results and avoids confusion from empty columns.
+
+---
+
 If you have questions, suggestions, or want to contribute, please open an issue or pull request on GitHub.
