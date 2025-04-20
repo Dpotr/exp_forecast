@@ -150,117 +150,108 @@ fig_trend.update_layout(
 )
 st.plotly_chart(fig_trend, use_container_width=True)
 
-# --- Forecasting, Backtesting, KPI Tracking ---
-st.subheader("Expense Forecasts by Category (7-day horizon)")
-
-results = []
-backtest_results = []
+# --- Hybrid robust forecasting with recurrence detection ---
 forecast_horizon = 7
-backtest_window = 60  # days for backtesting
-
-# For Excel export
+results = []
 forecast_export_rows = []
-
+category_forecasts = []
 for cat in df['category'].unique():
-    # --- Restrict to last 30 days for most adaptive forecast ---
     df_cat = df[df['category'] == cat].copy()
     last_30_start = df['date'].max() - pd.Timedelta(days=30)
     df_cat = df_cat[df_cat['date'] >= last_30_start]
-    # --- Outlier removal: drop top 1% ---
-    if len(df_cat) > 10:
-        threshold = df_cat['amount'].quantile(0.99)
-        df_cat = df_cat[df_cat['amount'] <= threshold]
-    # --- Aggregate by date ---
-    df_cat = df_cat.groupby(['date', 'country'], as_index=False)['amount'].sum()
-    df_cat = df_cat.sort_values('date')
-    # --- Log-transform for stability ---
-    df_cat['log_amount'] = np.log1p(df_cat['amount'])
-    # Prepare for Prophet
-    prophet_df = pd.DataFrame({
-        'ds': df_cat['date'],
-        'y': df_cat['log_amount'],
-        'country': df_cat['country']
-    })
-    prophet_df['country'] = prophet_df['country'].astype(str)
-    # --- Skip if not enough data ---
-    if len(prophet_df.dropna()) < 2:
-        st.warning(f"Not enough data to forecast for category '{cat}' (need at least 2 days in recent period). Skipping.")
-        continue
-    m = Prophet(interval_width=0.95, daily_seasonality=True, yearly_seasonality=True)
-    for c in prophet_df['country'].unique():
-        m.add_regressor(f"country_{c}")
-    for c in prophet_df['country'].unique():
-        prophet_df[f"country_{c}"] = (prophet_df['country'] == c).astype(int)
-    m.fit(prophet_df[['ds', 'y'] + [f"country_{c}" for c in prophet_df['country'].unique()]])
-    # Forecast future
-    last_date = df_cat['date'].max()
-    future_dates = pd.date_range(last_date + pd.Timedelta(days=1), periods=forecast_horizon)
-    last_country = df_cat.iloc[-1]['country']
-    future = pd.DataFrame({'ds': future_dates})
-    for c in prophet_df['country'].unique():
-        future[f"country_{c}"] = int(last_country == c)
-    forecast = m.predict(future)
-    # Inverse log-transform, clamp to zero
-    for i, row in forecast.iterrows():
-        forecast_val = max(np.expm1(row['yhat']), 0)
-        lower_val = max(np.expm1(row['yhat_lower']), 0)
-        upper_val = max(np.expm1(row['yhat_upper']), 0)
+    nonzero_days = (df_cat['amount'] > 0).sum()
+    recurrence_ratio = nonzero_days / 30
+    mean_30 = df_cat['amount'][df_cat['amount'] > 0].mean() if nonzero_days > 0 else 0
+    median_30 = df_cat['amount'][df_cat['amount'] > 0].median() if nonzero_days > 0 else 0
+    prophet_forecast = None
+    method = ''
+    # --- Recurrence-aware logic ---
+    if recurrence_ratio < 0.2:
+        # Treat as one-off, forecast zero
+        forecast_vals = [0.0] * forecast_horizon
+        method = 'Zero (one-off)'
+    else:
+        # Prophet only if enough data and not too extreme
+        use_prophet = False
+        if nonzero_days >= 5:
+            if len(df_cat) > 10:
+                threshold = df_cat['amount'].quantile(0.99)
+                df_cat = df_cat[df_cat['amount'] <= threshold]
+            df_cat = df_cat.groupby(['date', 'country'], as_index=False)['amount'].sum()
+            df_cat = df_cat.sort_values('date')
+            df_cat['log_amount'] = np.log1p(df_cat['amount'])
+            prophet_df = pd.DataFrame({
+                'ds': df_cat['date'],
+                'y': df_cat['log_amount'],
+                'country': df_cat['country']
+            })
+            prophet_df['country'] = prophet_df['country'].astype(str)
+            if len(prophet_df.dropna()) >= 2:
+                m = Prophet(interval_width=0.95, daily_seasonality=True, yearly_seasonality=True)
+                for c in prophet_df['country'].unique():
+                    m.add_regressor(f"country_{c}")
+                for c in prophet_df['country'].unique():
+                    prophet_df[f"country_{c}"] = (prophet_df['country'] == c).astype(int)
+                m.fit(prophet_df[['ds', 'y'] + [f"country_{c}" for c in prophet_df['country'].unique()]])
+                last_date = df_cat['date'].max()
+                future_dates = pd.date_range(last_date + pd.Timedelta(days=1), periods=forecast_horizon)
+                last_country = df_cat.iloc[-1]['country']
+                future = pd.DataFrame({'ds': future_dates})
+                for c in prophet_df['country'].unique():
+                    future[f"country_{c}"] = int(last_country == c)
+                forecast = m.predict(future)
+                prophet_forecast = [max(np.expm1(y), 0) for y in forecast['yhat']]
+                avg_prophet = np.mean(prophet_forecast)
+                if mean_30 > 0 and 0.5 * mean_30 <= avg_prophet <= 1.5 * mean_30:
+                    use_prophet = True
+                    method = 'Prophet'
+                elif median_30 > 0 and 0.5 * median_30 <= avg_prophet <= 1.5 * median_30:
+                    use_prophet = True
+                    method = 'Prophet'
+        if nonzero_days < 5:
+            forecast_vals = [0.0] * forecast_horizon
+            method = 'Zero (too sparse)'
+        elif use_prophet and prophet_forecast is not None:
+            forecast_vals = prophet_forecast
+            method = 'Prophet'
+        elif mean_30 > 0:
+            forecast_vals = [mean_30] * forecast_horizon
+            method = 'Mean (30d)'
+        elif median_30 > 0:
+            forecast_vals = [median_30] * forecast_horizon
+            method = 'Median (30d)'
+        else:
+            forecast_vals = [0.0] * forecast_horizon
+            method = 'Zero (fallback)'
+    for i in range(forecast_horizon):
+        forecast_date = (df['date'].max() + pd.Timedelta(days=i+1)).date()
         results.append({
             'category': cat,
-            'date': row['ds'].date(),
-            'forecast': forecast_val,
-            'lower': lower_val,
-            'upper': upper_val
+            'date': forecast_date,
+            'forecast': forecast_vals[i],
+            'lower': None,
+            'upper': None
         })
         forecast_export_rows.append({
             'category': cat,
-            'date': row['ds'].date(),
-            'forecast': forecast_val,
-            'lower': lower_val,
-            'upper': upper_val
+            'date': forecast_date,
+            'forecast': forecast_vals[i],
+            'lower': None,
+            'upper': None
         })
-    # --- Backtesting ---
-    # Use last N days for backtest
-    if len(df_cat) > backtest_window + forecast_horizon:
-        test_start = df_cat['date'].max() - pd.Timedelta(days=backtest_window)
-        df_bt = df_cat[df_cat['date'] >= test_start]
-        bt_dates = df_bt['date'].unique()
-        actuals = []
-        preds = []
-        for d in bt_dates[:-forecast_horizon]:
-            train_bt = df_cat[df_cat['date'] < d]
-            test_bt = df_cat[df_cat['date'] == d]
-            if len(train_bt) < 10: continue
-            bt_prophet_df = pd.DataFrame({
-                'ds': train_bt['date'],
-                'y': train_bt['log_amount'],
-                'country': train_bt['country'].astype(str)
-            })
-            for c in bt_prophet_df['country'].unique():
-                bt_prophet_df[f"country_{c}"] = (bt_prophet_df['country'] == c).astype(int)
-            m_bt = Prophet(interval_width=0.95, daily_seasonality=True, yearly_seasonality=True)
-            for c in bt_prophet_df['country'].unique():
-                m_bt.add_regressor(f"country_{c}")
-            m_bt.fit(bt_prophet_df[['ds', 'y'] + [f"country_{c}" for c in bt_prophet_df['country'].unique()]])
-            # Predict for d
-            future_bt = pd.DataFrame({'ds': [d]})
-            last_country_bt = train_bt.iloc[-1]['country']
-            for c in bt_prophet_df['country'].unique():
-                future_bt[f"country_{c}"] = int(last_country_bt == c)
-            pred_bt = m_bt.predict(future_bt)
-            actuals.append(np.expm1(test_bt['log_amount'].sum()))
-            preds.append(np.expm1(pred_bt['yhat'].iloc[0]))
-        # KPIs
-        if len(actuals) > 0:
-            mae = mean_absolute_error(actuals, preds)
-            rmse = np.sqrt(mean_squared_error(actuals, preds))
-            mape = np.mean(np.abs((np.array(actuals) - np.array(preds)) / (np.array(actuals) + 1e-8))) * 100
-            backtest_results.append({
-                'category': cat,
-                'MAE': mae,
-                'RMSE': rmse,
-                'MAPE': mape
-            })
+    category_forecasts.append({
+        'category': cat,
+        'Prophet': np.mean(prophet_forecast) if prophet_forecast is not None else None,
+        'Mean (30d)': mean_30,
+        'Median (30d)': median_30,
+        'Non-zero Days': nonzero_days,
+        'Recurrence Ratio': recurrence_ratio,
+        'Recommended': method
+    })
+
+# --- Show hybrid forecast diagnostics table ---
+st.write('### Forecast Diagnostics Table')
+st.dataframe(pd.DataFrame(category_forecasts))
 
 # Show forecast table
 forecast_df = pd.DataFrame(results)
@@ -328,32 +319,8 @@ if not forecast_df.empty:
             x=df_plot['date'], y=df_plot['forecast'], mode='lines+markers', name='Forecast',
             line=dict(color='royalblue')
         ))
-        fig.add_trace(go.Scatter(
-            x=df_plot['date'], y=df_plot['upper'], mode='lines', name='Upper 95%',
-            line=dict(width=0), showlegend=True
-        ))
-        fig.add_trace(go.Scatter(
-            x=df_plot['date'], y=df_plot['lower'], mode='lines', name='Lower 95%',
-            fill='tonexty', fillcolor='rgba(0,0,255,0.1)', line=dict(width=0), showlegend=True
-        ))
         fig.update_layout(title=f"Forecast for {cat} (with last 30d history)", xaxis_title="Date", yaxis_title="Amount", height=350)
         st.plotly_chart(fig, use_container_width=True)
-
-# Show backtest KPIs with subjective scoring
-bt_df = pd.DataFrame(backtest_results)
-def subjective_score(mape):
-    if mape < 10:
-        return "Excellent"
-    elif mape < 20:
-        return "Good"
-    elif mape < 35:
-        return "Acceptable"
-    else:
-        return "Poor"
-if not bt_df.empty:
-    bt_df['Subjective Score'] = bt_df['MAPE'].apply(subjective_score)
-    st.write("### Backtest KPIs (last 60 days)")
-    st.dataframe(bt_df)
 
 # --- Moving average baseline for comparison ---
 st.write("#### Moving Average Baseline (last 30 days)")
@@ -368,4 +335,4 @@ if not forecast_df.empty:
     if forecast_total > 1.5 * ma_total:
         st.warning(f"Forecasted daily expenses are much higher than recent 7-day moving average. Please review model results.")
 
-st.info("Forecasts use Prophet with daily/yearly seasonality and country as a regressor. 95% confidence intervals are shown. KPIs are calculated by rolling backtest. Model auto-updates with new data.")
+st.info("Forecasts use a hybrid robust approach: Prophet is used if enough data and its forecast is not extreme; otherwise, mean, median, or zero is used. 95% confidence intervals are not shown. Model auto-updates with new data.")
