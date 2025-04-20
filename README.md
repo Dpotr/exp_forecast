@@ -127,6 +127,31 @@ Suppose you have the following expenses in the last 30 days:
 - In this tool, MAE (Mean Absolute Error) is used as a simple tracking signal: the lower the MAE, the better the forecast matches reality.
 - If you see a high MAE, consider changing the activity window or reviewing your data for outliers.
 
+## Automated Expenses Updater
+
+### What it does
+- Reads new records from the "data" sheet in your `daily payments.xlsx` file (in `C:\Users\potre\OneDrive\Documents (excel files e t.c.)`)
+- Only considers columns: `date`, `category`, and `price EUR` (used as `amount`)
+- Cleans and normalizes all values:
+  - Amount: removes currency symbols, converts to float, rounds to 2 decimals
+  - Category: stripped and lowercased
+  - Date: only the date part is used (no time)
+- Filters out any rows where date/category is missing or amount is zero/NaN
+- Appends only truly new records (no duplicates) to `expenses.xlsx`
+- Sorts all records by date (oldest first)
+- Removes all rows with missing/empty/zero values in key columns
+- After each run, performs a test to guarantee no duplicates are ever inserted (idempotency)
+
+### How to use
+1. Place your daily payments in the Excel file mentioned above, in the `data` sheet.
+2. Run: `python update_expenses_from_daily.py`
+3. The script will print how many new records were added, or "No new records to add."
+4. Your `expenses.xlsx` will always be clean, deduplicated, and sorted.
+5. If you run the script again, it will not add duplicates.
+
+### Troubleshooting
+- If you get a diagnostic printout, it means some records were not matched due to subtle formatting issues. The script now filters out all empty/NaN/zero rows, so only real records are processed.
+
 ## Requirements
 - Python 3.8+
 - See `requirements.txt` for dependencies

@@ -172,6 +172,28 @@ def rolling_backtest(ts, methods, window=60, forecast_horizon=7):
     avg_errors = {name: np.nanmean(errs) for name, errs in errors.items()}
     return avg_errors
 
+def tracking_signals(y_true, y_pred):
+    # Advanced tracking signals
+    # 1. MAE
+    mae = mean_absolute_error(y_true, y_pred)
+    # 2. MAPE (Mean Absolute Percentage Error)
+    mape = np.mean(np.abs((np.array(y_true) - np.array(y_pred)) / (np.array(y_true) + 1e-8))) * 100
+    # 3. Bias (mean forecast error)
+    bias = np.mean(np.array(y_pred) - np.array(y_true))
+    # 4. Tracking Signal (Cumulative Forecast Error / MAE)
+    cfe = np.sum(np.array(y_pred) - np.array(y_true))
+    tsignal = cfe / (mae + 1e-8)
+    return {'MAE': mae, 'MAPE': mape, 'Bias': bias, 'Tracking Signal': tsignal}
+
+def subjective_score(mape, tsignal):
+    # Subjective scoring based on MAPE and tracking signal
+    if mape < 15 and abs(tsignal) < 2:
+        return 'Good', 'Forecast is accurate and unbiased.'
+    elif mape < 30 and abs(tsignal) < 4:
+        return 'Fair', 'Forecast is somewhat accurate, but may have some bias or volatility.'
+    else:
+        return 'Poor', 'Forecast is unreliable or highly biased.'
+
 # --- Streamlit sidebar: adjustable activity window ---
 st.sidebar.header("Forecast Settings")
 activity_window = st.sidebar.slider("Recent activity window (days)", min_value=7, max_value=90, value=30, step=1)
@@ -222,6 +244,16 @@ for cat in df['category'].unique():
     # --- Forecast with best method only if active ---
     if forecast_active:
         forecast_vals = methods[best_method](ts.values, forecast_horizon)
+        # --- Tracking signals for best method ---
+        # Use last 60 days for backtest tracking signals
+        if len(ts) > 67:
+            y_true = ts[-7:]
+            y_pred = methods[best_method](ts[:-7], 7)
+        else:
+            y_true = ts[-7:]
+            y_pred = forecast_vals
+        signals = tracking_signals(y_true, y_pred)
+        score, explanation = subjective_score(signals['MAPE'], signals['Tracking Signal'])
         for i in range(forecast_horizon):
             forecast_date = (df['date'].max() + pd.Timedelta(days=i+1)).date()
             results.append({
@@ -238,17 +270,31 @@ for cat in df['category'].unique():
                 'lower': None,
                 'upper': None
             })
+    else:
+        signals = {'MAE': None, 'MAPE': None, 'Bias': None, 'Tracking Signal': None}
+        score, explanation = 'Inactive', 'No recent activity. Forecast skipped.'
     category_forecasts.append({
         'category': cat,
         'Best Method': best_method,
         'MAE': avg_errors[best_method],
         'All MAEs': avg_errors,
         'Active for Forecast': forecast_active,
-        'Activity Window': activity_window
+        'Activity Window': activity_window,
+        'MAPE': signals['MAPE'],
+        'Bias': signals['Bias'],
+        'Tracking Signal': signals['Tracking Signal'],
+        'Score': score,
+        'Explanation': explanation
     })
 
+# --- Show forecast diagnostics table with explanations ---
+df_diag = pd.DataFrame(category_forecasts)
 st.write('### Forecast Diagnostics Table (Expert Backtest Selection)')
-st.dataframe(pd.DataFrame(category_forecasts))
+st.dataframe(df_diag)
+
+# --- Show subjective scoring and explanations ---
+for idx, row in df_diag.iterrows():
+    st.write(f"**{row['category']}**: {row['Score']} — {row['Explanation']}")
 
 # Show forecast table
 forecast_df = pd.DataFrame(results)
