@@ -56,6 +56,77 @@ The model will:
 - Forecast the next 7 days
 - Transform the forecast back to normal scale and show it in the dashboard and Excel export
 
+## Forecasting Methodology and Tracking Signals
+
+### 1. Activity Window
+- You can set the "recent activity window" (number of days) in the Streamlit sidebar. Only categories with at least one nonzero expense in this window are forecasted.
+- **Example:** If you set the window to 30 days, only categories with expenses in the last 30 days will be forecasted.
+
+### 2. Model Selection and Backtesting
+- For each category, the tool backtests several forecasting methods on the last 60 days:
+  - Mean of last 30 days
+  - Median of last 30 days
+  - Croston’s method (for intermittent demand)
+  - Prophet (for trend/seasonality)
+  - Zero (no forecast)
+- **The method with the lowest MAE (Mean Absolute Error) in backtesting is selected automatically for forecasting.**
+
+### 3. Forecasting Formulas
+- **Mean:**  
+  `forecast = mean(amounts[-30:])`
+- **Median:**  
+  `forecast = median(amounts[-30:])`
+- **Croston:**  
+  Specialized for lumpy demand (see `croston.py` for code)
+- **Prophet:**  
+  Time series model with trend and seasonality, fitted to historical data.
+- **Zero:**  
+  `forecast = 0` (used for inactive/one-off categories)
+
+### 4. Tracking Signals (Forecast Diagnostics)
+- The dashboard shows a diagnostics table for each category:
+  - Best method (chosen by backtest MAE)
+  - MAE (Mean Absolute Error)
+  - All MAEs for all methods
+  - Whether the category is "active for forecast" (based on activity window)
+  - The activity window size used
+- Use this table to understand which method is used and how well it performed in backtesting.
+
+### 5. Example (Step-by-Step)
+Suppose you have the following expenses in the last 30 days:
+
+| Date       | Category   | Amount |
+|------------|------------|--------|
+| 2025-04-01 | groceries  | 20     |
+| 2025-04-02 | groceries  | 30     |
+| ...        | ...        | ...    |
+| 2025-04-28 | groceries  | 25     |
+| 2025-04-15 | taxi car   | 100    |
+| 2025-04-20 | hotel      | 400    |
+
+- If you set the activity window to 14 days, only "groceries" (if it has expenses in that window) will be forecasted; "taxi car" and "hotel" will be skipped.
+- The tool will backtest all methods for "groceries" and select the one with the lowest MAE.
+
+### 6. How to Use the Tool (Step-by-Step Guide)
+1. **Prepare your data:**
+   - Place your expenses in `expenses.xlsx` (columns: `date`, `category`, `amount`).
+2. **Launch the dashboard:**
+   - Run: `streamlit run app.py`
+3. **Adjust the activity window:**
+   - Use the sidebar slider to set the "Recent activity window (days)" as desired (e.g., 14, 30, 60).
+   - The dashboard and forecasts update automatically.
+4. **Review diagnostics:**
+   - Check the diagnostics table for method selection, MAE, and activity status.
+5. **Export results:**
+   - Forecasts are saved to `forecast_results.xlsx` after each run.
+6. **Push updates to GitHub:**
+   - Use the sidebar button to commit and push changes (if enabled).
+
+### 7. Tracking Signals (for Dummies)
+- **Tracking signal** is a way to monitor if your forecast is consistently too high or too low compared to actuals.
+- In this tool, MAE (Mean Absolute Error) is used as a simple tracking signal: the lower the MAE, the better the forecast matches reality.
+- If you see a high MAE, consider changing the activity window or reviewing your data for outliers.
+
 ## Requirements
 - Python 3.8+
 - See `requirements.txt` for dependencies

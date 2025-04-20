@@ -172,6 +172,10 @@ def rolling_backtest(ts, methods, window=60, forecast_horizon=7):
     avg_errors = {name: np.nanmean(errs) for name, errs in errors.items()}
     return avg_errors
 
+# --- Streamlit sidebar: adjustable activity window ---
+st.sidebar.header("Forecast Settings")
+activity_window = st.sidebar.slider("Recent activity window (days)", min_value=7, max_value=90, value=30, step=1)
+
 results = []
 forecast_export_rows = []
 category_forecasts = []
@@ -184,13 +188,16 @@ for cat in df['category'].unique():
     if df_cat.empty or pd.isna(df_cat['date'].min()) or pd.isna(df_cat['date'].max()):
         st.warning(f"No data for category '{cat}' in the last 90 days. Skipping forecast.")
         continue
-    ts = df_cat.groupby('date')['amount'].sum().reindex(pd.date_range(df_cat['date'].min(), df_cat['date'].max()), fill_value=0)
+    # --- Only forecast if category is active in user-selected window ---
+    last_window_start = df['date'].max() - pd.Timedelta(days=activity_window)
+    recent_nonzero = (df_cat[df_cat['date'] >= last_window_start]['amount'] > 0).sum()
+    forecast_active = recent_nonzero > 0
+    ts = df_cat.groupby('date')['amount'].sum().reindex(pd.date_range(df_cat['date'].min(), df['date'].max()), fill_value=0)
     # --- Define forecasting methods ---
     def mean_method(ts, fh): return np.repeat(np.mean(ts[-30:]), fh)
     def median_method(ts, fh): return np.repeat(np.median(ts[-30:]), fh)
     def zero_method(ts, fh): return np.zeros(fh)
     def croston_method(ts, fh): return croston(ts, fh)
-    # Prophet method
     def prophet_method(ts, fh):
         import pandas as pd
         from prophet import Prophet
@@ -199,7 +206,7 @@ for cat in df['category'].unique():
             return np.zeros(fh)
         m = Prophet(interval_width=0.95, daily_seasonality=True, yearly_seasonality=True)
         m.fit(dfp)
-        future = pd.DataFrame({'ds': pd.date_range(dfp['ds'].max() + pd.Timedelta(days=1), periods=fh)})
+        future = pd.DataFrame({'ds': pd.date_range(df['date'].max() + pd.Timedelta(days=1), periods=fh)})
         forecast = m.predict(future)
         return forecast['yhat'].clip(lower=0).values
     methods = {
@@ -212,29 +219,32 @@ for cat in df['category'].unique():
     # --- Backtest and select best method ---
     avg_errors = rolling_backtest(ts, methods, window=60, forecast_horizon=7)
     best_method = min(avg_errors, key=avg_errors.get)
-    # --- Forecast with best method ---
-    forecast_vals = methods[best_method](ts.values, forecast_horizon)
-    for i in range(forecast_horizon):
-        forecast_date = (ts.index.max() + pd.Timedelta(days=i+1)).date()
-        results.append({
-            'category': cat,
-            'date': forecast_date,
-            'forecast': forecast_vals[i],
-            'lower': None,
-            'upper': None
-        })
-        forecast_export_rows.append({
-            'category': cat,
-            'date': forecast_date,
-            'forecast': forecast_vals[i],
-            'lower': None,
-            'upper': None
-        })
+    # --- Forecast with best method only if active ---
+    if forecast_active:
+        forecast_vals = methods[best_method](ts.values, forecast_horizon)
+        for i in range(forecast_horizon):
+            forecast_date = (df['date'].max() + pd.Timedelta(days=i+1)).date()
+            results.append({
+                'category': cat,
+                'date': forecast_date,
+                'forecast': forecast_vals[i],
+                'lower': None,
+                'upper': None
+            })
+            forecast_export_rows.append({
+                'category': cat,
+                'date': forecast_date,
+                'forecast': forecast_vals[i],
+                'lower': None,
+                'upper': None
+            })
     category_forecasts.append({
         'category': cat,
         'Best Method': best_method,
         'MAE': avg_errors[best_method],
-        'All MAEs': avg_errors
+        'All MAEs': avg_errors,
+        'Active for Forecast': forecast_active,
+        'Activity Window': activity_window
     })
 
 st.write('### Forecast Diagnostics Table (Expert Backtest Selection)')
