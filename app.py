@@ -302,8 +302,8 @@ def subjective_score(mape, tsignal):
 
 # --- Streamlit sidebar: adjustable activity window and forecast horizon ---
 st.sidebar.header("Forecast Settings")
-activity_window = st.sidebar.slider("Recent activity window (days)", min_value=7, max_value=90, value=30, step=1)
-forecast_horizon = st.sidebar.slider("Forecast horizon (days)", min_value=7, max_value=30, value=15, step=1)
+activity_window = st.sidebar.slider("Recent activity window (days)", min_value=7, max_value=90, value=70, step=1)
+forecast_horizon = st.sidebar.slider("Forecast horizon (days)", min_value=7, max_value=30, value=7, step=1)
 
 results = []
 forecast_export_rows = []
@@ -560,20 +560,20 @@ if not np.isnan(min_mae):
 
 # 5. Forecast Table & Summary
 st.header("Forecast")
-st.subheader("15-Day Forecast by Category")
+st.subheader(f"{forecast_horizon}-Day Forecast by Category")
 forecast_df = pd.DataFrame(results)
-st.caption("Forecasted expenses for the next 15 days, by category")
+st.caption(f"Forecasted expenses for the next {forecast_horizon} days, by category")
 st.dataframe(forecast_df)
-st.subheader("Total Forecast Summary (All Categories)")
+st.subheader(f"Total Forecast Summary (All Categories)")
 total_forecast = forecast_df.groupby('date')['forecast'].sum().reset_index()
 total_sum = total_forecast['forecast'].sum()
-st.caption("Total forecasted expenses for the next 15 days")
+st.caption(f"Total forecasted expenses for the next {forecast_horizon} days")
 st.dataframe(total_forecast.rename(columns={"forecast": "Total Forecast"}))
-st.metric(label="Total Forecasted Expenses (15 days)", value=f"{total_sum:.2f}")
+st.metric(label=f"Total Forecasted Expenses ({forecast_horizon} days)", value=f"{total_sum:.2f}")
 
 # 6. Stacked Column Chart: History + Forecast
 st.header("Stacked Chart")
-st.subheader("Stacked Column Chart: 30 Days History + 15 Days Forecast")
+st.subheader(f"Stacked Column Chart: 30 Days History + {forecast_horizon} Days Forecast")
 # Prepare historical data (last 30 days)
 last_30 = df[df['date'] >= (df['date'].max() - pd.Timedelta(days=30))]
 hist_pivot = last_30.groupby(['date', 'category'])['amount'].sum().reset_index()
@@ -590,7 +590,7 @@ for cat in combined.columns:
     ))
 fig_stacked.update_layout(
     barmode='stack',
-    title="Expenses: Last 30 Days (Actual) + Next 15 Days (Forecast)",
+    title=f"Expenses: Last 30 Days (Actual) + Next {forecast_horizon} Days (Forecast)",
     xaxis_title="Date",
     yaxis_title="Expenses",
     legend_title="Category",
