@@ -429,7 +429,7 @@ for cat in df['category'].unique():
         'periodic_spike': lambda ts, fh: periodic_spike_method(ts, fh, category=cat)
     }
     # --- Backtest and select best method ---
-    avg_errors = rolling_backtest(ts, methods, window=60, forecast_horizon=forecast_horizon)
+    avg_errors = rolling_backtest(ts, methods, window=activity_window, forecast_horizon=forecast_horizon)
     nonzero_days = (ts > 0).sum()
     # --- Special rule: if category is school, rent + communal, or car rent, force periodic_spike ---
     spike_cats = ['school', 'rent + communal', 'car rent']
@@ -487,8 +487,76 @@ for cat in df['category'].unique():
 
 st.subheader("Forecast Diagnostics Table")
 st.caption("Forecast performance metrics for each category")
+metric_tooltips = {
+    'Best Method': 'The forecasting method with the lowest average error for this category.',
+    'MAE': 'Mean Absolute Error: Average absolute difference between forecast and actual values. Lower is better.',
+    'All MAEs': 'MAE for each method. Used to select the best method.',
+    'Active for Forecast': 'Whether this category is included in the forecast.',
+    'Activity Window': 'Number of days of recent data used for metrics and forecasting.',
+    'MAPE': 'Mean Absolute Percentage Error: Average percent error between forecast and actual. Sensitive to small actuals.',
+    'Bias': 'Average signed error. Positive = overestimate, Negative = underestimate.',
+    'Tracking Signal': 'Indicates if forecast errors are consistently biased. Large values mean persistent over/underforecast.',
+    'Score': 'Subjective rating of forecast reliability (Good/Poor/Inactive).',
+    'Explanation': 'Short explanation of the forecast score and reliability.'
+}
+# Show tooltips above the diagnostics table
+with st.expander("ℹ️ Metric Explanations (click to expand)"):
+    for k, v in metric_tooltips.items():
+        st.markdown(f"**{k}:** {v}")
 df_diag = pd.DataFrame(category_forecasts)
 st.dataframe(df_diag)
+
+# --- Forecast Metrics Heatmap ---
+st.header("Forecast Metrics Heatmap")
+st.caption("Explore how forecast error (MAE) varies with activity window and forecast horizon. Lower is better.")
+activity_windows = list(range(7, 91, 7))
+forecast_horizons = list(range(7, 31, 7))
+heatmap_data = []
+for aw in activity_windows:
+    row = []
+    for fh in forecast_horizons:
+        # Use all categories for the heatmap
+        maes = []
+        for cat in df['category'].unique():
+            df_cat = df[df['category'] == cat].copy()
+            last_90_start = df['date'].max() - pd.Timedelta(days=90)
+            df_cat = df_cat[df_cat['date'] >= last_90_start]
+            if df_cat.empty or pd.isna(df_cat['date'].min()) or pd.isna(df_cat['date'].max()):
+                continue
+            ts = df_cat.groupby('date')['amount'].sum().reindex(pd.date_range(df_cat['date'].min(), df_cat['date'].max()), fill_value=0)
+            methods = {
+                'mean': mean_method,
+                'median': median_method,
+                'zero': zero_method,
+                'croston': croston_method,
+                'prophet': prophet_method,
+                'periodic_spike': lambda ts, fh: periodic_spike_method(ts, fh, category=cat)
+            }
+            avg_errors = rolling_backtest(ts, methods, window=aw, forecast_horizon=fh)
+            min_mae = min(avg_errors.values())
+            maes.append(min_mae)
+        row.append(np.nanmean(maes) if maes else np.nan)
+    heatmap_data.append(row)
+import pandas as pd
+heatmap_df = pd.DataFrame(heatmap_data, index=activity_windows, columns=forecast_horizons)
+fig_hm = px.imshow(
+    heatmap_df.values,
+    x=forecast_horizons,
+    y=activity_windows,
+    labels=dict(x="Forecast Horizon (days)", y="Activity Window (days)", color="Avg MAE"),
+    color_continuous_scale='Viridis',
+    aspect="auto"
+)
+fig_hm.update_layout(title="Forecast MAE by Activity Window and Forecast Horizon", height=400)
+st.plotly_chart(fig_hm, use_container_width=True)
+
+# Recommend best parameter (lowest MAE)
+min_mae = np.nanmin(heatmap_df.values)
+if not np.isnan(min_mae):
+    best_idx = np.unravel_index(np.nanargmin(heatmap_df.values), heatmap_df.shape)
+    best_aw = activity_windows[best_idx[0]]
+    best_fh = forecast_horizons[best_idx[1]]
+    st.success(f"Recommended: Activity Window = {best_aw} days, Forecast Horizon = {best_fh} days (lowest MAE: {min_mae:.2f})")
 
 # 5. Forecast Table & Summary
 st.header("Forecast")
