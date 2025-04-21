@@ -207,6 +207,15 @@ You can now analyze both weekly and within-month seasonality in your expenses us
 - **Export & Sharing:** Download filtered tables/charts as Excel/CSV or images. One-click PDF/HTML summary report.
 - **User Guidance:** Contextual tooltips and explanations are provided for every chart, metric, and anomaly, including why a certain forecast method was chosen.
 
+## Version History
+
+### v1.1.0 (2025-04-21)
+- Added Forecast Metrics Heatmap: Visualizes how MAE varies with activity window and forecast horizon, recommends best settings.
+- Diagnostics table now recalculates metrics based on user-selected activity window and forecast horizon.
+- Removed lower/upper forecast intervals from dashboard and exports for clarity.
+- Added collapsible tooltips section for all metrics in the diagnostics table.
+- Improved code and UI clarity based on user feedback.
+
 ## Requirements
 - Python 3.8+
 - See `requirements.txt` for dependencies
