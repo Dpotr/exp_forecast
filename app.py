@@ -1032,6 +1032,108 @@ if not backward_results.empty:
     
     fig_error.update_layout(annotations=annotations)
     st.plotly_chart(fig_error, use_container_width=True)
+    
+    # --- 7-Day Moving Average Comparison ---
+    st.header("7-Day Moving Average Comparison")
+    st.caption("Compare smoothed actual and forecasted values to identify trends")
+    
+    if not backward_results.empty and len(backward_results) >= 7:
+        # Calculate 7-day moving averages
+        ma_results = backward_results.copy()
+        ma_results['actual_ma7'] = ma_results['actual'].rolling(window=7, min_periods=1).mean()
+        ma_results['forecast_ma7'] = ma_results['forecast'].rolling(window=7, min_periods=1).mean()
+        
+        # Calculate MAE and MAPE for moving averages
+        ma_results['ma7_abs_error'] = (ma_results['actual_ma7'] - ma_results['forecast_ma7']).abs()
+        ma_results['ma7_pct_error'] = (ma_results['ma7_abs_error'] / ma_results['actual_ma7'] * 100).replace([np.inf, -np.inf], np.nan)
+        
+        # Calculate summary metrics
+        avg_ma7_mae = ma_results['ma7_abs_error'].mean()
+        avg_ma7_mape = ma_results['ma7_pct_error'].mean()
+        
+        # Create the plot
+        fig_ma = go.Figure()
+        
+        # Add actual MA7 line
+        fig_ma.add_trace(go.Scatter(
+            x=ma_results['date'],
+            y=ma_results['actual_ma7'],
+            name='Actual (7-day MA)',
+            line=dict(color='#1f77b4', width=3),
+            mode='lines+markers',
+            marker=dict(size=6),
+            hovertemplate='<b>Date</b>: %{x|%Y-%m-%d}<br>' +
+                        '<b>Actual MA7</b>: $%{y:,.2f}<extra></extra>'
+        ))
+        
+        # Add forecast MA7 line
+        fig_ma.add_trace(go.Scatter(
+            x=ma_results['date'],
+            y=ma_results['forecast_ma7'],
+            name=f'Forecast (7-day MA, {horizon}-day horizon)',
+            line=dict(color='#ff7f0e', width=3, dash='dash'),
+            mode='lines+markers',
+            marker=dict(size=6, symbol='diamond'),
+            hovertemplate='<b>Date</b>: %{x|%Y-%m-%d}<br>' +
+                        f'<b>Forecast MA7 ({horizon}-day horizon)</b>: $%{{y:,.2f}}<extra></extra>'
+        ))
+        
+        # Add error metrics as annotations
+        ma_annotations = [
+            dict(
+                x=0.02,
+                y=0.95,
+                xref='paper',
+                yref='paper',
+                text=f"MAE (MA7): ${avg_ma7_mae:,.2f}<br>MAPE (MA7): {avg_ma7_mape:.1f}%",
+                showarrow=False,
+                bgcolor='white',
+                bordercolor='gray',
+                borderwidth=1,
+                borderpad=4
+            )
+        ]
+        
+        fig_ma.update_layout(
+            title=f'7-Day Moving Average: Actual vs {horizon}-Day Forecast',
+            xaxis_title='Date',
+            yaxis_title='Amount (7-day MA)',
+            hovermode='x unified',
+            height=500,
+            legend=dict(
+                orientation='h',
+                yanchor='bottom',
+                y=1.02,
+                xanchor='right',
+                x=1
+            ),
+            annotations=ma_annotations
+        )
+        
+        # Add range slider
+        fig_ma.update_xaxes(
+            rangeslider_visible=True,
+            rangeselector=dict(
+                buttons=list([
+                    dict(count=7, label="1w", step="day", stepmode="backward"),
+                    dict(count=1, label="1m", step="month", stepmode="backward"),
+                    dict(count=3, label="3m", step="month", stepmode="backward"),
+                    dict(step="all")
+                ])
+            )
+        )
+        
+        st.plotly_chart(fig_ma, use_container_width=True)
+        
+        # Add explanation
+        st.markdown("""
+        **How to interpret this chart:**
+        - The chart shows 7-day moving averages of both actual and forecasted values
+        - This smooths out daily fluctuations to better show trends
+        - The forecast line shows what was predicted (on average) for each day, looking back from the forecast date
+        - The closer the two lines are, the better the forecast captures the underlying trend
+        - The MAE and MAPE values show the average error in the moving averages
+        """)
 
 # --- Export forecast to Excel ---
 if not forecast_df.empty:

@@ -4,10 +4,12 @@ This project is an interactive web dashboard for forecasting categorized expense
 
 ## Features
 - **Expense Forecasting**: Forecasts daily expenses for the next 7 days by category, incorporating seasonality and country effects.
+- **Backward Forecast Analysis**: Evaluates forecast accuracy by comparing past predictions with actuals for different time horizons.
+- **Category-Specific Analysis**: Analyze forecast accuracy for individual categories or groups of categories.
 - **Backtesting & KPI Tracking**: Performs rolling backtests and calculates MAE, RMSE, and MAPE to ensure forecast quality before publishing.
 - **Self-Correction**: Automatically updates and retrains models as new data arrives, ensuring adaptive and accurate predictions.
 - **Interactive Visualizations**: Stacked bar charts, forecast plots with confidence intervals, and KPI tables.
-- **Country Regimes**: Highlights periods spent in Vietnam, Kazakhstan, and Montenegro, and uses these as features in the model.
+- **Country Regimes**: Highlights periods spent in different countries and uses these as features in the model.
 
 ## Usage
 1. Place your historical expenses in `expenses.xlsx` (columns: `date`, `category`, `amount`).
@@ -36,7 +38,19 @@ This project is an interactive web dashboard for forecasting categorized expense
 - For comparison, a simple 7-day moving average of daily total expenses is shown.
 - If the model’s forecast is much higher than this average, a warning is displayed.
 
-### 4. Output Files
+### 4. Backward Forecast Analysis
+- **How It Works**:
+  - For each day in your historical data, the system looks back to see what was forecasted N days ago
+  - Compares these forecasts with what actually happened
+  - Calculates accuracy metrics including MAE, MAPE, and accuracy within ±10% and ±20%
+  - Visualizes forecast vs. actual over time with interactive plots
+
+### 5. Category Selection
+- Select specific categories to analyze their forecast accuracy
+- Compare performance across different expense types
+- Identify which categories are easiest/hardest to predict
+
+### 6. Output Files
 - Forecast results are saved to `forecast_results.xlsx` after each run.
 
 ### 5. Example
@@ -107,7 +121,7 @@ Suppose you have the following expenses in the last 30 days:
 - If you set the activity window to 14 days, only "groceries" (if it has expenses in that window) will be forecasted; "taxi car" and "hotel" will be skipped.
 - The tool will backtest all methods for "groceries" and select the one with the lowest MAE.
 
-### 6. How to Use the Tool (Step-by-Step Guide)
+### 7. How to Use the Tool (Step-by-Step Guide)
 1. **Prepare your data:**
    - Place your expenses in `expenses.xlsx` (columns: `date`, `category`, `amount`).
 2. **Launch the dashboard:**
