@@ -751,7 +751,204 @@ st.write("#### Moving Average Baseline (last 30 days)")
 hist_30 = df[df['date'] >= (df['date'].max() - pd.Timedelta(days=30))]
 ma_baseline = hist_30.groupby('date')['amount'].sum().rolling(window=7, min_periods=1).mean()
 st.line_chart(ma_baseline, use_container_width=True)
+###############################################################################################
+# --- Monthly Budget Tracking ---
+st.write("#### Monthly Budget Tracking")
 
+# Budget configuration
+current_date = pd.Timestamp.now()
+current_month = current_date.replace(day=1)
+days_in_month = (current_month + pd.offsets.MonthEnd(1)).day
+current_day = min(current_date.day, days_in_month)
+
+# Add budget input with default value
+DEFAULT_BUDGET = 4000
+with st.expander("Budget Settings"):
+    monthly_budget = st.number_input(
+        "Monthly Budget ($)",
+        min_value=0.0,
+        value=float(DEFAULT_BUDGET),
+        step=100.0,
+        format="%.2f",
+        help="Set your monthly budget amount"
+    )
+
+# Calculate daily budget
+daily_budget = monthly_budget / days_in_month
+
+# Create date range for the current month (up to current date)
+date_range = pd.date_range(
+    start=current_month, 
+    end=current_date,
+    freq='D'
+)
+
+# Initialize budget dataframe with all required columns
+budget_data = []
+for i, date in enumerate(date_range, 1):
+    budget_data.append({
+        'date': date,
+        'day_of_month': i,
+        'cumulative_budget': round(i * daily_budget, 2),
+        'daily_amount': 0.0,
+        'cumulative_actual': 0.0,
+        'variance': 0.0
+    })
+
+budget_df = pd.DataFrame(budget_data)
+
+# Get current month data
+current_month_mask = (
+    (df['date'].dt.year == current_date.year) & 
+    (df['date'].dt.month == current_date.month) &
+    (df['date'].dt.date <= current_date.date())
+)
+current_month_data = df[current_month_mask].copy()
+
+# Process daily totals if we have data
+if not current_month_data.empty:
+    # Convert dates to match for comparison
+    current_month_data['date_only'] = current_month_data['date'].dt.date
+    
+    # Group by date and sum amounts
+    daily_totals = current_month_data.groupby('date_only')['amount'].sum().reset_index()
+    
+    # Update budget_df with actual amounts
+    for _, row in daily_totals.iterrows():
+        date = row['date_only']
+        amount = row['amount']
+        mask = budget_df['date'].dt.date == date
+        if mask.any():
+            budget_df.loc[mask, 'daily_amount'] = amount
+    
+    # Calculate running totals and variance
+    budget_df['cumulative_actual'] = budget_df['daily_amount'].cumsum()
+    budget_df['variance'] = budget_df['cumulative_actual'] - budget_df['cumulative_budget']
+
+    # Current status
+    current_actual = budget_df['cumulative_actual'].iloc[-1] if not budget_df.empty else 0
+    current_budget = budget_df['cumulative_budget'].iloc[-1] if not budget_df.empty else 0
+    current_variance = current_actual - current_budget
+    current_day = budget_df['day_of_month'].iloc[-1] if not budget_df.empty else 0
+
+    # Debug info
+    with st.expander("Debug Info - Budget Data"):
+        st.write(f"Current date: {current_date}")
+        st.write(f"Current month data range: {current_month} to {current_date}")
+        st.write(f"Found {len(current_month_data)} transactions in current month")
+        if not current_month_data.empty:
+            st.write("Sample transactions:", current_month_data[['date', 'category', 'amount']].head())
+        st.write("Budget DataFrame:", budget_df)
+    
+    # Create the plot
+    fig_budget = go.Figure()
+    
+    # Add budget line (full month)
+    fig_budget.add_trace(go.Scatter(
+        x=budget_df['date'].dt.day,
+        y=budget_df['cumulative_budget'],
+        name='Budget',
+        line=dict(color='#00cc96', width=3, dash='dash'),
+        hovertemplate='Day %{x}<br>Budget: $%{y:,.2f}<extra></extra>'
+    ))
+    
+    # Add actuals line (up to current day)
+    fig_budget.add_trace(go.Scatter(
+        x=budget_df[budget_df['date'] <= current_date]['date'].dt.day,
+        y=budget_df[budget_df['date'] <= current_date]['cumulative_actual'],
+        name='Actual',
+        line=dict(color='#636efa', width=3),
+        mode='lines+markers',
+        marker=dict(size=8),
+        hovertemplate='Day %{x}<br>Actual: $%{y:,.2f}<extra></extra>'
+    ))
+    
+    # Add today's line
+    fig_budget.add_vline(
+        x=current_day, 
+        line_dash="dash", 
+        line_color="red",
+        annotation_text=f"Today (Day {current_day})",
+        annotation_position="top right"
+    )
+    
+    # Add budget status annotation
+    status_color = "red" if current_variance > 0 else "green"
+    status_text = f"Over budget by ${abs(current_variance):,.2f}" if current_variance > 0 \
+        else f"Under budget by ${abs(current_variance):,.2f}"
+    
+    # Update layout
+    fig_budget.update_layout(
+        title=f"Monthly Budget: ${monthly_budget:,.0f} (${daily_budget:,.2f}/day)",
+        xaxis_title="Day of Month",
+        yaxis_title="Cumulative Amount ($)",
+        hovermode="x unified",
+        height=500,
+        showlegend=True,
+        annotations=[
+            dict(
+                x=0.02,
+                y=0.95,
+                xref="paper",
+                yref="paper",
+                text=f"<b>Current Status (Day {current_day}):</b><br>"
+                     f"Spent: ${current_actual:,.2f}<br>"
+                     f"Budget: ${current_budget:,.2f}<br>"
+                     f"<span style='color:{status_color}'>{status_text}</span>",
+                showarrow=False,
+                align="left",
+                bordercolor="gray",
+                borderwidth=1,
+                borderpad=4,
+                bgcolor="white",
+                opacity=0.9
+            )
+        ]
+    )
+    
+    st.plotly_chart(fig_budget, use_container_width=True)
+    
+    # Add daily spending table for the current month
+    st.write("#### Daily Spending This Month")
+    display_df = budget_df[['date', 'day_of_month', 'daily_amount', 'cumulative_actual', 'cumulative_budget', 'variance']].copy()
+    display_df = display_df.rename(columns={
+        'date': 'Date',
+        'day_of_month': 'Day',
+        'daily_amount': 'Daily Amount',
+        'cumulative_actual': 'Cumulative Actual',
+        'cumulative_budget': 'Cumulative Budget',
+        'variance': 'Variance'
+    })
+    
+    # Format the display
+    display_df['Date'] = display_df['Date'].dt.strftime('%Y-%m-%d')
+    display_df['Daily Amount'] = display_df['Daily Amount'].apply(lambda x: f"${x:,.2f}")
+    display_df['Cumulative Actual'] = display_df['Cumulative Actual'].apply(lambda x: f"${x:,.2f}")
+    display_df['Cumulative Budget'] = display_df['Cumulative Budget'].apply(lambda x: f"${x:,.2f}")
+    
+    # Color code variance
+    def color_variance(val):
+        if pd.isna(val) or val == '':
+            return ''
+        # Convert string with $ and commas to float if needed
+        if isinstance(val, str):
+            try:
+                val = float(val.replace('$', '').replace(',', ''))
+            except (ValueError, AttributeError):
+                return ''
+        if val > 0:
+            return 'color: red'
+        return 'color: green'
+    
+    variance_styled = display_df.style.applymap(
+        lambda x: color_variance(float(x.replace('$', '').replace(',', '')) if isinstance(x, str) and x != '' else None),
+        subset=['Variance']
+    )
+    
+    st.dataframe(display_df, use_container_width=True, hide_index=True)
+else:
+    st.info("No data available for the current month.")
+###############################################################################################################
 # --- Warning if Prophet forecast is much higher than moving average ---
 if not forecast_df.empty:
     forecast_total = forecast_df.groupby('date')['forecast'].sum().mean()
@@ -875,11 +1072,44 @@ def calculate_backward_accuracy(df, forecast_horizon=7, min_data_points=30):
         return pd.DataFrame()
 
 # Add UI controls for backward forecast analysis
+st.write("### Backward Forecast Performance Analysis")
+
+# Create columns for the controls
 col1, col2, col3 = st.columns(3)
 with col1:
     max_horizon = min(30, len(df['date'].unique()) - 15)  # Ensure enough data
     horizon = st.slider("Forecast Horizon (days)", 1, max(1, max_horizon), 7, 1,
                        help="Number of days ahead to evaluate forecast accuracy")
+
+# Add date range selection
+min_date = df['date'].min().date()
+max_date = df['date'].max().date()
+default_end = max_date
+default_start = max(min_date, (pd.to_datetime(default_end) - pd.DateOffset(months=3)).date())
+
+with st.expander("Date Range Settings", expanded=True):
+    date_col1, date_col2 = st.columns(2)
+    with date_col1:
+        start_date = st.date_input(
+            "Start Date",
+            value=default_start,
+            min_value=min_date,
+            max_value=max_date,
+            help="Start date for the analysis period"
+        )
+    with date_col2:
+        end_date = st.date_input(
+            "End Date",
+            value=default_end,
+            min_value=min_date,
+            max_value=max_date,
+            help="End date for the analysis period"
+        )
+
+    # Ensure start date is before end date
+    if start_date > end_date:
+        st.error("Error: Start date must be before end date")
+        st.stop()
 
 # Add category selection
 all_categories = sorted(df['category'].unique())
@@ -890,14 +1120,21 @@ selected_categories = st.multiselect(
     help="Select specific categories to analyze or leave empty to include all categories"
 )
 
-# Filter data if specific categories are selected
-analysis_df = df.copy()
+# Filter data based on date range and categories
+analysis_df = df[
+    (df['date'].dt.date >= start_date) & 
+    (df['date'].dt.date <= end_date)
+].copy()
+
 if selected_categories:
     analysis_df = analysis_df[analysis_df['category'].isin(selected_categories)]
-    st.info(f"Showing results for categories: {', '.join(selected_categories)}")
+    st.info(f"Showing results for categories: {', '.join(selected_categories)} from {start_date} to {end_date}")
+else:
+    st.info(f"Showing results for all categories from {start_date} to {end_date}")
 
 # Calculate backward forecast performance
-backward_results = calculate_backward_accuracy(analysis_df, forecast_horizon=horizon)
+with st.spinner("Calculating forecast accuracy..."):
+    backward_results = calculate_backward_accuracy(analysis_df, forecast_horizon=horizon)
 
 if not backward_results.empty:
     # Calculate summary metrics
