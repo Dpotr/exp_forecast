@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import plotly.express as px
 import plotly.graph_objects as go
 from prophet import Prophet
@@ -11,6 +11,7 @@ from pandas import ExcelWriter
 import subprocess
 from croston import croston
 from anomaly_utils import detect_outliers, detect_anomaly_transactions, recurring_payments
+from forecast_utils import aggregate_daily_to_weekly, calculate_weekly_metrics, add_week_metadata
 
 def add_country_column(df):
     # Define date ranges for each country
@@ -304,6 +305,22 @@ def subjective_score(mape, tsignal):
 st.sidebar.header("Forecast Settings")
 activity_window = st.sidebar.slider("Recent activity window (days)", min_value=7, max_value=90, value=70, step=1)
 forecast_horizon = st.sidebar.slider("Forecast horizon (days)", min_value=7, max_value=30, value=7, step=1)
+# Spike threshold for labeling large errors in Backward Forecast plots
+spike_threshold = st.sidebar.slider("Spike threshold (% error)", min_value=10, max_value=100, value=30, step=5, help="Points where |percent error| exceeds this will be annotated on the chart")
+
+# Add button to update expenses from daily payments
+st.sidebar.header("Data Management")
+if st.sidebar.button("🔄 Update Expenses from Daily Payments"):
+    try:
+        import subprocess
+        result = subprocess.run(['python', 'update_expenses_from_daily.py'], capture_output=True, text=True)
+        if result.returncode == 0:
+            st.sidebar.success("✅ Expenses updated successfully!")
+            st.sidebar.info("Please refresh the page to see the updated data.")
+        else:
+            st.sidebar.error(f"❌ Error updating expenses:\n{result.stderr}")
+    except Exception as e:
+        st.sidebar.error(f"❌ Failed to run update script: {str(e)}")
 
 results = []
 forecast_export_rows = []
@@ -963,19 +980,32 @@ st.header("Backward Forecast Performance")
 st.caption("Analyze forecast accuracy over time by comparing past forecasts with actuals")
 
 # Calculate backward forecast performance
-def calculate_backward_accuracy(df, forecast_horizon=7, min_data_points=30):
+def calculate_backward_accuracy(df, forecast_horizon=7, min_data_points=30, timeframe='daily', activity_window=60):
     """
     Calculate forecast accuracy by looking back at past forecasts and comparing with actuals.
     
     Args:
-        df: DataFrame with transaction data
+        df: DataFrame with transaction data with columns: date, amount, category
         forecast_horizon: Number of days ahead to forecast
-        min_data_points: Minimum number of data points required for analysis
+        activity_window: Number of recent days used as training window for generating each historical forecast
+        min_data_points: Minimum number of data points required for daily analysis
+        df: DataFrame with transaction data with columns: date, amount, category
+        forecast_horizon: Number of days ahead to forecast
+        min_data_points: Minimum number of data points required for daily analysis
+        timeframe: 'daily' or 'weekly' - whether to return daily or weekly aggregated results
         
     Returns:
-        DataFrame with date, actual, forecast, and error metrics
+        DataFrame with date, actual, forecast, and error metrics. For weekly timeframe,
+        the date will be the end of the week (Sunday).
     """
     try:
+        # Validate inputs
+        if timeframe not in ['daily', 'weekly']:
+            raise ValueError("timeframe must be either 'daily' or 'weekly'")
+            
+        if df.empty:
+            return pd.DataFrame()
+            
         # Ensure we have a copy of the dataframe
         df = df.copy()
         
@@ -986,16 +1016,27 @@ def calculate_backward_accuracy(df, forecast_horizon=7, min_data_points=30):
         # Get unique dates with actual data
         actual_dates = df['date'].sort_values().unique()
         
-        if len(actual_dates) < min_data_points + forecast_horizon:
-            st.warning(f"Not enough data points for analysis. Need at least {min_data_points + forecast_horizon} days of data. Have {len(actual_dates)} days.")
+        # Adjust minimum data requirements based on timeframe
+        min_days_required = forecast_horizon + 1  # At least one full forecast cycle
+        if timeframe == 'weekly':
+            # For weekly, we can be more lenient - need at least 2 weeks of data
+            min_days_required = max(forecast_horizon + 1, 14)  # At least 2 weeks
+            # Adjust min_data_points to be at least min_days_required
+            min_data_points = min(min_data_points, min_days_required)
+        
+        if len(actual_dates) < min_days_required:
+            st.warning(f"Not enough data points for {timeframe} analysis. Need at least {min_days_required} days of data. Have {len(actual_dates)} days.")
             return pd.DataFrame()
+            
+        # For weekly view, we can proceed with fewer data points than the default min_data_points
+        if timeframe == 'weekly' and len(actual_dates) < min_data_points + forecast_horizon:
+            st.warning(f"Limited data available for weekly analysis. Using all available {len(actual_dates)} days.")
         
         results = []
         
-        # For each date with actual data, look back to find the forecast made 'forecast_horizon' days ago
-        for i in range(forecast_horizon, len(actual_dates)):
+        # (Initial-period logic removed) Forecasts will be computed uniformly for all dates with a full look-back horizon
+        for i in range(0):  # disabled initial-period loop
             current_date = actual_dates[i]
-            forecast_date = actual_dates[i - forecast_horizon]
             
             # Get actual values for current date (sum across all categories)
             actual_data = df[df['date'] == current_date]
@@ -1004,46 +1045,157 @@ def calculate_backward_accuracy(df, forecast_horizon=7, min_data_points=30):
                 
             actual = actual_data['amount'].sum()
             
-            # Get forecast made on forecast_date for current_date
-            forecast_df = df[df['date'] <= forecast_date].copy()
-            if len(forecast_df) == 0:
-                continue
-                
-            forecast_values = []
+            # Initialize total_forecast at the start of each date's processing
+            total_forecast = 0
+            forecast_by_category = {}
             
-            # Generate forecast for each category
-            for cat in forecast_df['category'].unique():
-                df_cat = forecast_df[forecast_df['category'] == cat].copy()
-                if len(df_cat) < 14:  # Skip if not enough data
+            # Get unique categories in the data
+            all_categories = df['category'].unique()
+            
+            # Generate forecast for each category independently
+            for cat in all_categories:
+                # Get all data for this category up to current date
+                cat_data = df[(df['category'] == cat) & (df['date'] <= current_date)].copy()
+                if len(cat_data) < 1:  # Need at least one data point
                     continue
                     
                 # Create time series with proper datetime index
-                ts = df_cat.groupby('date')['amount'].sum()
+                ts = cat_data.groupby('date')['amount'].sum()
                 
-                # Skip if forecast date is not in the index
-                if forecast_date not in ts.index:
+                try:
+                    # Get the position of the current date
+                    current_date_idx = ts.index.get_loc(current_date)
+                    
+                    # Use all available data up to current date
+                    lookback = min(30, current_date_idx + 1)
+                    if lookback < 1:
+                        continue
+                        
+                    forecast_ts = ts.iloc[max(0, current_date_idx - lookback + 1):current_date_idx + 1]
+                    
+                    # For initial period, use simple average of available data
+                    forecast = forecast_ts.mean() if not forecast_ts.empty else 0
+                    
+                    if forecast > 0:  # Only store non-zero forecasts
+                        forecast_by_category[cat] = forecast
+                        
+                except (KeyError, ValueError) as e:
+                    continue
+            
+            # Calculate error metrics
+            error = total_forecast - actual
+            abs_error = abs(error)
+            pct_error = (abs_error / actual * 100) if actual > 0 else 0
+            
+            results.append({
+                'date': current_date,
+                'forecast_date': current_date,  # Same as current_date for initial period
+                'forecast_horizon': forecast_horizon,
+                'actual': actual,
+                'forecast': total_forecast,
+                'error': error,
+                'abs_error': abs_error,
+                'pct_error': pct_error,
+                'within_10pct': 1 if pct_error <= 10 else 0,
+                'within_20pct': 1 if pct_error <= 20 else 0,
+                'forecast_breakdown': forecast_by_category,
+                'initial_period': True  # Mark as initial period forecast
+            })
+            
+            # Calculate error metrics
+            error = total_forecast - actual
+            abs_error = abs(error)
+            pct_error = (abs_error / actual * 100) if actual > 0 else 0
+            
+            results.append({
+                'date': current_date,
+                'forecast_date': current_date,  # Same as current_date for initial period
+                'forecast_horizon': forecast_horizon,
+                'actual': actual,
+                'forecast': total_forecast,
+                'error': error,
+                'abs_error': abs_error,
+                'pct_error': pct_error,
+                'within_10pct': 1 if pct_error <= 10 else 0,
+                'within_20pct': 1 if pct_error <= 20 else 0,
+                'forecast_breakdown': forecast_by_category,
+                'initial_period': True  # Mark as initial period forecast
+            })
+        
+        # Then process the remaining dates with full forecast horizon
+        for i in range(forecast_horizon, len(actual_dates)):
+            current_date = actual_dates[i]
+            forecast_date = actual_dates[i - forecast_horizon]
+            
+
+                
+            # Get actual values for current date (sum across all categories)
+            actual_data = df[df['date'] == current_date]
+            if len(actual_data) == 0:
+                continue
+                
+            actual = actual_data['amount'].sum()
+            
+            # Initialize total_forecast at the start of each date's processing
+            total_forecast = 0
+            forecast_by_category = {}
+            
+            # Get unique categories in the data
+            all_categories = df['category'].unique()
+            
+            # Generate forecast for each category independently
+            for cat in all_categories:
+                # Get all data for this category up to forecast date
+                cat_data = df[(df['category'] == cat) & (df['date'] <= forecast_date)].copy()
+                # Limit to recent activity_window days
+                if activity_window is not None and activity_window > 0:
+                    window_start = forecast_date - pd.Timedelta(days=activity_window - 1)
+                    cat_data = cat_data[cat_data['date'] >= window_start]
+                if len(cat_data) < 1:  # Need at least one data point
                     continue
                     
+                # Create time series with proper datetime index
+                ts = cat_data.groupby('date')['amount'].sum()
+                
                 try:
                     # Get the position of the forecast date
                     forecast_date_idx = ts.index.get_loc(forecast_date)
                     
-                    # Get last 30 days of data up to forecast date (or as much as available)
-                    lookback = min(30, forecast_date_idx + 1)
-                    forecast_ts = ts.iloc[forecast_date_idx - lookback + 1:forecast_date_idx + 1]
+                    # Determine lookback period based on timeframe
+                    max_lookback = 30 if timeframe == 'daily' else 14
+                    lookback = min(max_lookback, forecast_date_idx + 1)
                     
-                    # Simple forecast: average of same day of week
-                    day_of_week = pd.Timestamp(current_date).dayofweek
-                    same_day = forecast_ts[forecast_ts.index.dayofweek == day_of_week]
-                    forecast = same_day.mean() if not same_day.empty else 0
-                    forecast_values.append(forecast)
+                    # Ensure we have at least one week of data
+                    if lookback < 1:
+                        continue
+                        
+                    forecast_ts = ts.iloc[max(0, forecast_date_idx - lookback + 1):forecast_date_idx + 1]
                     
+                    # For weekly aggregation, use simple average of available data
+                    if timeframe == 'weekly':
+                        forecast = forecast_ts.mean() if not forecast_ts.empty else 0
+                    else:
+                        # For daily, use average of same day of week
+                        day_of_week = pd.Timestamp(current_date).dayofweek
+                        same_day = forecast_ts[forecast_ts.index.dayofweek == day_of_week]
+                        forecast = same_day.mean() if not same_day.empty else 0
+                        
+                    if forecast > 0:  # Only store non-zero forecasts
+                        forecast_by_category[cat] = forecast
+                        
                 except (KeyError, ValueError) as e:
-                    # Skip this category if there's an error with date handling
                     continue
             
-            # Sum forecasts across all categories
-            total_forecast = sum(forecast_values) if forecast_values else 0
+            # Initialize total_forecast
+            total_forecast = 0
+            
+            # Only proceed if we have forecasts
+            if forecast_by_category:
+                total_forecast = sum(forecast_by_category.values())
+            
+            # If no forecasts were generated, skip this date
+            if len(forecast_by_category) == 0:
+                continue
             
             # Calculate error metrics
             error = total_forecast - actual
@@ -1060,10 +1212,29 @@ def calculate_backward_accuracy(df, forecast_horizon=7, min_data_points=30):
                 'abs_error': abs_error,
                 'pct_error': pct_error,
                 'within_10pct': 1 if pct_error <= 10 else 0,
-                'within_20pct': 1 if pct_error <= 20 else 0
+                'within_20pct': 1 if pct_error <= 20 else 0,
+                'forecast_breakdown': forecast_by_category
             })
         
-        return pd.DataFrame(results)
+        daily_results = pd.DataFrame(results)
+        
+        # If timeframe is daily, return as is
+        if timeframe == 'daily':
+            return daily_results
+            
+        # For weekly timeframe, aggregate the daily results
+        try:
+            weekly_results = aggregate_daily_to_weekly(daily_results)
+            if not weekly_results.empty:
+                weekly_results = add_week_metadata(weekly_results)
+                return weekly_results
+            return pd.DataFrame()
+            
+        except Exception as weekly_error:
+            st.error(f"Error in weekly aggregation: {str(weekly_error)}")
+            import traceback
+            st.code(traceback.format_exc())
+            return daily_results  # Fall back to daily results if weekly fails
         
     except Exception as e:
         st.error(f"Error in backward forecast calculation: {str(e)}")
@@ -1080,6 +1251,15 @@ with col1:
     max_horizon = min(30, len(df['date'].unique()) - 15)  # Ensure enough data
     horizon = st.slider("Forecast Horizon (days)", 1, max(1, max_horizon), 7, 1,
                        help="Number of days ahead to evaluate forecast accuracy")
+
+# Add timeframe selector (daily/weekly)
+timeframe = st.radio(
+    "View",
+    ["Daily", "Weekly"],
+    index=0,
+    horizontal=True,
+    help="Select whether to view results by day or aggregated by week"
+).lower()
 
 # Add date range selection
 min_date = df['date'].min().date()
@@ -1120,9 +1300,12 @@ selected_categories = st.multiselect(
     help="Select specific categories to analyze or leave empty to include all categories"
 )
 
-# Filter data based on date range and categories
+# --- Extend data window by forecast horizon so that forecasts for the first
+# days in the reporting window are generated using data that would have been
+# available at that time. We pull extra `horizon` days before the start date.
+window_start_date = (pd.to_datetime(start_date) - pd.Timedelta(days=horizon)).date()
 analysis_df = df[
-    (df['date'].dt.date >= start_date) & 
+    (df['date'].dt.date >= window_start_date) &
     (df['date'].dt.date <= end_date)
 ].copy()
 
@@ -1133,28 +1316,82 @@ else:
     st.info(f"Showing results for all categories from {start_date} to {end_date}")
 
 # Calculate backward forecast performance
-with st.spinner("Calculating forecast accuracy..."):
-    backward_results = calculate_backward_accuracy(analysis_df, forecast_horizon=horizon)
+with st.spinner(f"Calculating {timeframe} forecast accuracy..."):
+    backward_results = calculate_backward_accuracy(
+        analysis_df,
+        forecast_horizon=horizon,
+        activity_window=activity_window,
+        timeframe=timeframe
+    )
+    # Keep only rows that fall inside the user-selected report window
+    backward_results = backward_results[
+        (backward_results['date'] >= pd.to_datetime(start_date)) &
+        (backward_results['date'] <= pd.to_datetime(end_date))
+    ]
 
 if not backward_results.empty:
-    # Calculate summary metrics
-    avg_mae = backward_results['abs_error'].mean()
-    avg_mape = backward_results['pct_error'].mean()
-    accuracy_10pct = backward_results['within_10pct'].mean() * 100
-    accuracy_20pct = backward_results['within_20pct'].mean() * 100
+    # Calculate summary metrics based on the selected timeframe
+    if timeframe == 'daily':
+        # For daily view, calculate metrics from daily values
+        total_actual = backward_results['actual'].sum()
+        total_forecast = backward_results['forecast'].sum()
+        total_error = total_forecast - total_actual
+        total_abs_error = abs(total_error)
+        # Weighted Absolute Percentage Error (WAPE)
+        wape = (backward_results['abs_error'].sum() / total_actual * 100) if total_actual > 0 else 0
+        
+                # Mean Absolute Percentage Error (daily average of |pct_error|)
+        avg_mape = backward_results['pct_error'].abs().mean()
+        
+        # Calculate accuracy metrics
+        accuracy_10pct = backward_results['within_10pct'].mean() * 100 if 'within_10pct' in backward_results.columns else 0
+        accuracy_20pct = backward_results['within_20pct'].mean() * 100 if 'within_20pct' in backward_results.columns else 0
+        
+        # Calculate average daily metrics
+        avg_mae = backward_results['abs_error'].mean()  # daily average MAE
+    else:  # weekly
+        # For weekly view, use the metrics calculated in the aggregation function
+        metrics = calculate_weekly_metrics(backward_results)
+        total_actual = metrics['total_actual']
+        total_forecast = metrics['total_forecast']
+        total_error = metrics['total_error']
+        total_abs_error = metrics['total_abs_error']
+        avg_mape = metrics['avg_mape']  # already daily-mean in helper
+        wape = metrics.get('wape', 0)
+        accuracy_10pct = metrics['accuracy_10pct']
+        accuracy_20pct = metrics['accuracy_20pct']
+        avg_mae = metrics['total_abs_error'] / len(backward_results) if len(backward_results) > 0 else 0
     
     # Show category information if filtered
     if selected_categories:
         st.subheader(f'Analysis for {len(selected_categories)} Selected Categories')
     
     # Display summary metrics
-    st.metric("Mean Absolute Error (MAE)", f"${avg_mae:,.2f}")
-    st.metric("Mean Absolute Percentage Error (MAPE)", f"{avg_mape:.1f}%")
-    st.metric(f"Accuracy (±10%)", f"{accuracy_10pct:.1f}%")
-    st.metric(f"Accuracy (±20%)", f"{accuracy_20pct:.1f}%")
+    col1, col2, col3, col4, col5 = st.columns(5)
+    with col1:
+        st.metric("Total Actual", f"${total_actual:,.2f}")
+    with col2:
+        st.metric("Total Forecast", f"${total_forecast:,.2f}", delta=f"{total_error:+,.2f}")
+    with col3:
+        st.metric("Mean Absolute Error (MAE)", f"${avg_mae:,.2f}")
+    with col4:
+        st.metric("Mean Absolute % Error (MAPE)", f"{avg_mape:.1f}%")
+    with col5:
+        st.metric("Weighted APE (WAPE)", f"{wape:.1f}%")
+    
+    # Display accuracy metrics in a separate row
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Accuracy (±10%)", f"{accuracy_10pct:.1f}%")
+    with col2:
+        st.metric("Accuracy (±20%)", f"{accuracy_20pct:.1f}%")
     
     # Plot actual vs forecast over time
     fig = go.Figure()
+    
+    # Determine x-axis label and title based on timeframe
+    x_label = 'Week Starting' if timeframe == 'weekly' else 'Date'
+    title_suffix = f'by {timeframe.capitalize()}' if timeframe == 'weekly' else ''
     
     # Add actual values
     fig.add_trace(go.Scatter(
@@ -1163,35 +1400,122 @@ if not backward_results.empty:
         name='Actual',
         line=dict(color='#1f77b4', width=2),
         mode='lines+markers',
-        marker=dict(size=6)
+        marker=dict(size=6 if timeframe == 'daily' else 8),
+        hovertemplate=(
+            f'<b>{"Week Starting" if timeframe == "weekly" else "Date"}:</b> %{{x|%Y-%m-%d}}<br>' +
+            '<b>Actual:</b> $%{y:,.2f}<br>' +
+            '<extra></extra>'
+        )
     ))
     
-    # Add forecasted values
-    fig.add_trace(go.Scatter(
-        x=backward_results['date'],
-        y=backward_results['forecast'],
-        name=f'{horizon}-Day Forecast',
-        line=dict(color='#ff7f0e', width=2, dash='dash'),
-        mode='lines+markers',
-        marker=dict(size=6, symbol='diamond')
-    ))
+    # Check if we have initial period forecasts
+    has_initial_forecasts = 'initial_period' in backward_results.columns
     
-    # Add error bands
-    fig.add_trace(go.Scatter(
-        x=backward_results['date'].tolist() + backward_results['date'].tolist()[::-1],
-        y=(backward_results['forecast'] * 1.2).tolist() + (backward_results['forecast'] * 0.8).tolist()[::-1],
-        fill='toself',
-        fillcolor='rgba(255, 127, 14, 0.1)',
-        line=dict(width=0),
-        showlegend=True,
-        name='±20% Forecast Range',
-        hoverinfo='skip'
-    ))
+    if has_initial_forecasts:
+        # Plot initial period forecasts with a different style
+        initial_mask = backward_results['initial_period'] == True
+        if initial_mask.any():
+            fig.add_trace(go.Scatter(
+                x=backward_results[initial_mask]['date'],
+                y=backward_results[initial_mask]['forecast'],
+                name=f'{horizon}-Day Forecast (Initial)',
+                line=dict(color='#ff7f0e', width=2, dash='dot'),
+                mode='lines+markers',
+                marker=dict(size=6, symbol='square'),
+                hovertemplate=(
+                    f'<b>{"Week Starting" if timeframe == "weekly" else "Date"}:</b> %{{x|%Y-%m-%d}}<br>' +
+                    '<b>Forecast (Initial):</b> $%{y:,.2f}<br>' +
+                    '<i>Based on partial lookback</i><br>' +
+                    '<extra></extra>'
+                )
+            ))
+        
+        # Plot regular forecasts
+        regular_mask = ~initial_mask
+        if regular_mask.any():
+            fig.add_trace(go.Scatter(
+                x=backward_results[regular_mask]['date'],
+                y=backward_results[regular_mask]['forecast'],
+                name=f'{horizon}-Day Forecast',
+                line=dict(color='#ff7f0e', width=2, dash='dash'),
+                mode='lines+markers',
+                marker=dict(size=6, symbol='diamond'),
+                hovertemplate=(
+                    f'<b>{"Week Starting" if timeframe == "weekly" else "Date"}:</b> %{{x|%Y-%m-%d}}<br>' +
+                    '<b>Forecast:</b> $%{y:,.2f}<br>' +
+                    '<extra></extra>'
+                )
+            ))
+    else:
+        # Fallback to original behavior if no initial period data
+        fig.add_trace(go.Scatter(
+            x=backward_results['date'],
+            y=backward_results['forecast'],
+            name=f'{horizon}-Day Forecast',
+            line=dict(color='#ff7f0e', width=2, dash='dash'),
+            mode='lines+markers',
+            marker=dict(size=6, symbol='diamond'),
+            hovertemplate=(
+                f'<b>{"Week Starting" if timeframe == "weekly" else "Date"}:</b> %{{x|%Y-%m-%d}}<br>' +
+                '<b>Forecast:</b> $%{y:,.2f}<br>' +
+                '<extra></extra>'
+            )
+        ))
+    
+    # Add error bands (only for daily view, as weekly aggregation makes them less meaningful)
+    # --- Spike annotations & details for large errors ---
+    spike_mask = (backward_results['pct_error'].abs() > spike_threshold)
+    if spike_mask.any():
+        fig.add_trace(go.Scatter(
+            x=backward_results[spike_mask]['date'],
+            y=backward_results[spike_mask]['actual'],
+            mode='markers',
+            name='Spike',
+            marker=dict(color='red', size=10, symbol='x'),
+            hovertemplate='<b>Date:</b> %{x|%Y-%m-%d}<br><b>Actual:</b> $%{y:,.2f}<extra></extra>'
+        ))
+        # Build spike details table (top 3 categories by actual amount)
+        spike_rows = []
+        forecast_rows = []
+        for d in backward_results[spike_mask]['date']:
+            day_actuals = analysis_df[analysis_df['date'] == d]
+            top_cats = day_actuals.groupby('category')['amount'].sum().sort_values(ascending=False).head(3)
+            spike_rows.append({
+                'date': d.date(),
+                'pct_error': backward_results.loc[backward_results['date']==d, 'pct_error'].values[0],
+                **{f'top{i+1}_{cat}': amt for i,(cat,amt) in enumerate(top_cats.items())}
+            })
+        spikes_df = pd.DataFrame(spike_rows)
+        st.subheader("Spike Details (Actual top categories)")
+        st.dataframe(spikes_df, use_container_width=True)
+        # --- Forecast side ---
+        for d in backward_results[spike_mask]['date']:
+            breakdown = backward_results.loc[backward_results['date']==d, 'forecast_breakdown'].values[0]
+            top_cats_f = dict(sorted(breakdown.items(), key=lambda kv: kv[1], reverse=True)[:3])
+            forecast_rows.append({
+                'date': d.date(),
+                **{f'top{i+1}_{cat}': amt for i,(cat,amt) in enumerate(top_cats_f.items())}
+            })
+        spikes_fore_df = pd.DataFrame(forecast_rows)
+        st.subheader("Spike Forecast Details (Top categories)")
+        st.dataframe(spikes_fore_df, use_container_width=True)
+
+    if timeframe == 'daily':
+        fig.add_trace(go.Scatter(
+            x=backward_results['date'].tolist() + backward_results['date'].tolist()[::-1],
+            y=(backward_results['forecast'] * 1.2).tolist() + (backward_results['forecast'] * 0.8).tolist()[::-1],
+            fill='toself',
+            fillcolor='rgba(255, 127, 14, 0.1)',
+            line=dict(width=0),
+            showlegend=True,
+            name='±20% Forecast Range',
+            hoverinfo='skip'
+        ))
     
     fig.update_layout(
-        title=f'Actual vs {horizon}-Day Forecast for {len(selected_categories) or "All"} Categories',
-        xaxis_title='Date',
-        yaxis_title='Amount',
+        title=f'Actual vs {horizon}-Day Forecast {title_suffix} for {len(selected_categories) or "All"} Categories',
+        xaxis_title=x_label,
+        yaxis_title=f'Total {timeframe.capitalize()} Amount',
         hovermode='x unified',
         height=500,
         legend=dict(
@@ -1200,6 +1524,18 @@ if not backward_results.empty:
             y=1.02,
             xanchor='right',
             x=1
+        ),
+        xaxis=dict(
+            tickformat='%b %d, %Y',
+            rangeslider_visible=True if timeframe == 'weekly' else False,
+            rangeselector=dict(
+                buttons=list([
+                    dict(count=1, label="1m", step="month", stepmode="backward"),
+                    dict(count=3, label="3m", step="month", stepmode="backward"),
+                    dict(count=6, label="6m", step="month", stepmode="backward"),
+                    dict(step="all")
+                ])
+            ) if timeframe == 'weekly' else {}
         )
     )
     st.plotly_chart(fig, use_container_width=True)
@@ -1214,13 +1550,13 @@ if not backward_results.empty:
         name='Error %',
         line=dict(color='#d62728', width=2),
         mode='lines+markers',
-        marker=dict(size=6),
-        customdata=backward_results[['forecast', 'actual']],
+        marker=dict(size=6 if timeframe == 'daily' else 8),
+        customdata=backward_results[['forecast', 'actual', 'date']],
         hovertemplate=(
-            '<b>Date</b>: %{x|%Y-%m-%d}<br>'
-            '<b>Error</b>: %{y:.1f}%<br>'
-            '<b>Forecast</b>: $%{customdata[0]:.2f}<br>'
-            '<b>Actual</b>: $%{customdata[1]:.2f}<br>'
+            f'<b>{"Week Starting" if timeframe == "weekly" else "Date"}:</b> %{{customdata[2]|%Y-%m-%d}}<br>' +
+            '<b>Error</b>: %{y:.1f}%<br>' +
+            '<b>Forecast</b>: $%{customdata[0]:,.2f}<br>' +
+            '<b>Actual</b>: $%{customdata[1]:,.2f}<br>' +
             '<extra></extra>'
         )
     ))
@@ -1243,12 +1579,24 @@ if not backward_results.empty:
     )
     
     fig_error.update_layout(
-        title=f'Forecast Error Over Time ({horizon}-Day Horizon)',
-        xaxis_title='Date',
-        yaxis_title='Error %',
+        title=f'Forecast Error Over Time ({horizon}-Day Horizon) {title_suffix}',
+        xaxis_title=x_label,
+        yaxis_title=f'Error % ({timeframe.capitalize()} Aggregated)',
         hovermode='x',
         height=400,
-        showlegend=True
+        showlegend=True,
+        xaxis=dict(
+            tickformat='%b %d, %Y',
+            rangeslider_visible=True if timeframe == 'weekly' else False,
+            rangeselector=dict(
+                buttons=list([
+                    dict(count=1, label="1m", step="month", stepmode="backward"),
+                    dict(count=3, label="3m", step="month", stepmode="backward"),
+                    dict(count=6, label="6m", step="month", stepmode="backward"),
+                    dict(step="all")
+                ])
+            ) if timeframe == 'weekly' else {}
+        )
     )
     
     # Add metrics as annotations

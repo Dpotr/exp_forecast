@@ -4,7 +4,7 @@ This project is an interactive web dashboard for forecasting categorized expense
 
 ## Features
 - **Expense Forecasting**: Forecasts daily expenses for the next 7 days by category, incorporating seasonality and country effects.
-- **Backward Forecast Analysis**: Evaluates forecast accuracy by comparing past predictions with actuals for different time horizons.
+- **Backward Forecast Analysis**: Evaluates forecast accuracy by comparing past predictions with actuals for different time horizons. View results by day or aggregated by week for trend analysis.
 - **Category-Specific Analysis**: Analyze forecast accuracy for individual categories or groups of categories.
 - **Backtesting & KPI Tracking**: Performs rolling backtests and calculates MAE, RMSE, and MAPE to ensure forecast quality before publishing.
 - **Self-Correction**: Automatically updates and retrains models as new data arrives, ensuring adaptive and accurate predictions.
@@ -49,6 +49,38 @@ This project is an interactive web dashboard for forecasting categorized expense
 - Select specific categories to analyze their forecast accuracy
 - Compare performance across different expense types
 - Identify which categories are easiest/hardest to predict
+
+## Weekly Aggregation Feature
+
+The dashboard now includes a weekly aggregation view for backward forecast analysis, allowing you to analyze forecast performance at a weekly level to identify trends that might be less visible in daily data.
+
+### How to Use Weekly Aggregation
+
+1. **Access the Feature**:
+   - In the Backward Forecast Performance Analysis section, find the "View" radio buttons at the top.
+   - Toggle between "Daily" and "Weekly" to switch between views.
+
+2. **Understanding Weekly Aggregation**:
+   - **Daily View**: Shows actual vs forecasted values for each day, with daily error metrics.
+   - **Weekly View**: Aggregates daily values into weekly totals (Sunday-Saturday) and calculates metrics on the aggregated values.
+
+3. **Key Differences in Weekly View**:
+   - X-axis shows the start date of each week
+   - Error metrics are calculated on weekly aggregates, not daily values
+   - Error bands are hidden as they're less meaningful with weekly aggregation
+   - Hover tooltips show weekly summaries instead of daily values
+
+4. **When to Use Weekly Aggregation**:
+   - To smooth out daily volatility and focus on weekly trends
+   - When daily forecasts are too noisy to identify patterns
+   - For longer-term planning where weekly aggregates are more relevant
+   - To evaluate forecast performance over longer time horizons
+
+5. **Technical Notes**:
+   - Weekly aggregation is performed after calculating daily forecasts and metrics
+   - The week is defined as Sunday-Saturday (following standard business conventions)
+   - Weeks with partial data (at the beginning or end of your date range) are still included
+   - All amounts are summed within each week before calculating percentage errors
 
 ### 6. Output Files
 - Forecast results are saved to `forecast_results.xlsx` after each run.
@@ -222,6 +254,12 @@ You can now analyze both weekly and within-month seasonality in your expenses us
 - **User Guidance:** Contextual tooltips and explanations are provided for every chart, metric, and anomaly, including why a certain forecast method was chosen.
 
 ## Version History
+
+### v1.2.0 (2025-07-23)
+- Forecast horizon alignment: for any date displayed, the value is the forecast generated exactly *N* days earlier (where *N* is the selected Forecast Horizon). This ensures that the earliest days in the report window use truly "look-ahead" predictions.
+- The dashboard now automatically pulls an extra *horizon* days of data before the chosen start date so the underlying model has access to the information required to build those earlier forecasts.
+- Removed the previous "initial period" shortcut; all dates are now handled with the same logic.
+- UI unchanged – simply pick a date range and horizon, and the app does the rest.
 
 ### v1.1.0 (2025-04-21)
 - Added Forecast Metrics Heatmap: Visualizes how MAE varies with activity window and forecast horizon, recommends best settings.
