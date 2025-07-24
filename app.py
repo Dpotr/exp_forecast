@@ -10,7 +10,8 @@ import os
 from pandas import ExcelWriter
 import subprocess
 from croston import croston
-from anomaly_utils import detect_outliers, detect_anomaly_transactions, recurring_payments
+from anomaly_utils import detect_outliers, detect_anomaly_transactions, recurring_payments, get_comprehensive_anomalies, create_anomaly_visualization, create_anomaly_summary_table
+from forecast_metrics import ForecastMetrics, calculate_forecast_metrics
 from forecast_utils import aggregate_daily_to_weekly, calculate_weekly_metrics, add_week_metadata, aggregate_daily_to_monthly
 from config import config
 
@@ -112,23 +113,79 @@ if selected_categories:
 else:
     st.warning("No categories selected. Showing empty dashboard.")
 
-# --- Outlier & Anomaly Detection ---
-st.header("Anomaly & Outlier Detection")
-outlier_days = detect_outliers(df)
-if not outlier_days.empty:
-    st.subheader("Outlier Days (Last 60 Days)")
-    st.caption("Days with total spending far from the 7-day rolling mean (z-score > 3)")
-    st.dataframe(outlier_days)
-else:
-    st.info("No daily outliers detected in the last 60 days.")
+# --- Enhanced Anomaly & Outlier Detection ---
+st.header("Enhanced Anomaly & Outlier Detection")
 
-anomaly_tx = detect_anomaly_transactions(df)
-if not anomaly_tx.empty:
-    st.subheader("Anomalous Transactions (Last 60 Days)")
-    st.caption("Transactions with unusually high/low amounts for their category (z-score > 3)")
-    st.dataframe(anomaly_tx)
-else:
-    st.info("No anomalous transactions detected in the last 60 days.")
+# Get comprehensive anomaly results
+anomalies_dict = get_comprehensive_anomalies(df)
+
+# Create tabs for different views
+tab1, tab2, tab3 = st.tabs(["📊 Visual Dashboard", "📋 Summary Table", "🔍 Detailed Results"])
+
+with tab1:
+    st.subheader("Anomaly Detection Dashboard")
+    
+    with st.expander("ℹ️ How to interpret anomaly detection methods"):
+        st.markdown("""
+        **Z-Score Method**: Uses standard deviation to find outliers. Points >3 standard deviations from mean are flagged.
+        - *Best for*: Normal distributions, detecting extreme values
+        - *Limitation*: Sensitive to other outliers
+        
+        **IQR Method**: Uses interquartile range (Q3-Q1). Points beyond Q1-1.5×IQR or Q3+1.5×IQR are outliers.
+        - *Best for*: Skewed data, robust to extreme values
+        - *Limitation*: May miss subtle anomalies
+        
+        **Modified Z-Score**: Uses median and MAD (median absolute deviation) instead of mean/std.
+        - *Best for*: Data with outliers already present
+        - *Limitation*: More conservative, may miss some anomalies
+        
+        **Seasonal Method**: Analyzes anomalies within each day-of-week pattern.
+        - *Best for*: Regular weekly spending patterns
+        - *Limitation*: Requires sufficient data per weekday
+        
+        **Category Enhanced**: Combines Z-score and IQR methods per spending category.
+        - *Best for*: Transaction-level analysis
+        - *Limitation*: Needs minimum transactions per category
+        """)
+    
+    anomaly_fig = create_anomaly_visualization(df, anomalies_dict)
+    st.plotly_chart(anomaly_fig, use_container_width=True)
+
+with tab2:
+    st.subheader("Anomaly Detection Summary")
+    summary_table = create_anomaly_summary_table(anomalies_dict)
+    if not summary_table.empty:
+        st.dataframe(summary_table, use_container_width=True)
+        
+        # Quick stats
+        total_anomalies = summary_table['Count'].sum()
+        st.metric("Total Anomalies Detected", total_anomalies)
+    else:
+        st.info("No anomalies detected across all methods.")
+
+with tab3:
+    st.subheader("Detailed Anomaly Results")
+    
+    # Legacy outlier detection (for backward compatibility)
+    outlier_days = detect_outliers(df)
+    if not outlier_days.empty:
+        st.subheader("Outlier Days (Z-Score Method)")
+        st.caption("Days with total spending far from the 7-day rolling mean")
+        st.dataframe(outlier_days)
+    
+    # Legacy transaction anomalies
+    anomaly_tx = detect_anomaly_transactions(df)
+    if not anomaly_tx.empty:
+        st.subheader("Anomalous Transactions (Legacy Method)")
+        st.caption("Transactions with unusually high/low amounts for their category")
+        st.dataframe(anomaly_tx)
+    
+    # Enhanced results by method
+    for method_name, anomaly_df in anomalies_dict.items():
+        if not anomaly_df.empty:
+            method_display = method_name.replace('_', ' ').title()
+            st.subheader(f"{method_display} Results")
+            st.dataframe(anomaly_df)
 
 # --- Recurring Payments Detection ---
 st.header("Recurring Payments & Alerts")
@@ -1448,6 +1505,174 @@ if not backward_results.empty:
         st.metric("Accuracy (±10%)", f"{accuracy_10pct:.1f}%")
     with col2:
         st.metric("Accuracy (±20%)", f"{accuracy_20pct:.1f}%")
+    
+    # Add comprehensive forecast metrics using the new module
+    st.subheader("📊 Comprehensive Forecast Performance Metrics")
+    
+    if len(backward_results) > 0:
+        # Calculate comprehensive metrics
+        comprehensive_metrics = calculate_forecast_metrics(
+            actual=backward_results['actual'].values,
+            forecast=backward_results['forecast'].values,
+            dates=backward_results['date'].values
+        )
+        
+        # Create tabs for different metric categories
+        metrics_tab1, metrics_tab2, metrics_tab3, metrics_tab4 = st.tabs([
+            "📈 Basic Metrics", "📊 Advanced Metrics", "🎯 Quality Assessment", "📅 Time Analysis"
+        ])
+        
+        with metrics_tab1:
+            st.write("**Core Accuracy Metrics**")
+            basic_metrics = comprehensive_metrics['basic_metrics']
+            percentage_metrics = comprehensive_metrics['percentage_metrics']
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("MAE", f"${basic_metrics['mae']:.2f}")
+                st.metric("RMSE", f"${basic_metrics['rmse']:.2f}")
+            with col2:
+                st.metric("MAPE", f"{percentage_metrics['mape']:.1f}%")
+                st.metric("SMAPE", f"{percentage_metrics['smape']:.1f}%")
+            with col3:
+                st.metric("Mean Error (Bias)", f"${basic_metrics['me']:.2f}")
+                st.metric("Max Error", f"${basic_metrics['max_error']:.2f}")
+            with col4:
+                st.metric("Correlation", f"{comprehensive_metrics['summary_stats']['correlation']:.3f}")
+                st.metric("R²", f"{comprehensive_metrics['summary_stats']['r_squared']:.3f}")
+        
+        with metrics_tab2:
+            st.write("**Directional & Distribution Metrics**")
+            directional_metrics = comprehensive_metrics['directional_metrics']
+            distribution_metrics = comprehensive_metrics['distribution_metrics']
+            scaled_metrics = comprehensive_metrics['scaled_metrics']
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.write("**Directional Accuracy**")
+                st.metric("Direction Correct", f"{directional_metrics['directional_accuracy']:.1f}%")
+                st.metric("Hit Rate (±10%)", f"{directional_metrics['hit_rate_10pct']:.1f}%")
+                st.metric("Hit Rate (±20%)", f"{directional_metrics['hit_rate_20pct']:.1f}%")
+            
+            with col2:
+                st.write("**Forecast Bias**")
+                st.metric("Overforecast %", f"{distribution_metrics['overforecast_percentage']:.1f}%")
+                st.metric("Underforecast %", f"{distribution_metrics['underforecast_percentage']:.1f}%")
+                st.metric("Theil's U", f"{distribution_metrics['theil_u']:.3f}")
+            
+            with col3:
+                st.write("**Scale-Independent**")
+                if not np.isinf(scaled_metrics['mase']):
+                    st.metric("MASE", f"{scaled_metrics['mase']:.3f}")
+                else:
+                    st.metric("MASE", "N/A")
+                st.metric("CV-RMSE", f"{scaled_metrics['cv_rmse']:.3f}" if not np.isinf(scaled_metrics['cv_rmse']) else "N/A")
+        
+        with metrics_tab3:
+            st.write("**Overall Quality Assessment**")
+            assessment = comprehensive_metrics['overall_assessment']
+            
+            # Quality rating with color coding
+            rating_colors = {
+                'excellent': 'green',
+                'good': 'blue', 
+                'fair': 'orange',
+                'poor': 'red'
+            }
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown(f"**Overall Rating:** :{rating_colors.get(assessment['overall_rating'], 'gray')}[{assessment['overall_rating'].upper()}]")
+                st.metric("Quality Score", f"{assessment['overall_score']:.2f}/4.0")
+                
+                st.write("**Individual Ratings:**")
+                st.write(f"• MAPE: {assessment['mape_rating']}")
+                st.write(f"• Direction: {assessment['directional_rating']}")  
+                st.write(f"• Hit Rate: {assessment['hit_rate_rating']}")
+            
+            with col2:
+                st.write("**Recommendations:**")
+                for i, rec in enumerate(assessment['recommendations'], 1):
+                    st.write(f"{i}. {rec}")
+        
+        with metrics_tab4:
+            if 'time_metrics' in comprehensive_metrics:
+                st.write("**Time-Based Performance Analysis**")
+                time_metrics = comprehensive_metrics['time_metrics']
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Recent Performance", f"${time_metrics['recent_mae']:.2f}")
+                    st.metric("Historical Performance", f"${time_metrics['historical_mae']:.2f}")
+                    
+                with col2:
+                    improvement = time_metrics['improvement_over_time']
+                    st.metric("Improvement Over Time", f"{improvement:+.1f}%")
+                
+                # Monthly and day-of-week performance
+                if 'monthly_performance' in time_metrics and time_metrics['monthly_performance']:
+                    st.write("**Monthly Performance (MAE)**")
+                    monthly_perf = time_metrics['monthly_performance']['mae']
+                    if monthly_perf:
+                        monthly_df = pd.DataFrame(list(monthly_perf.items()), columns=['Month', 'MAE'])
+                        monthly_df['Month'] = monthly_df['Month'].astype(str)
+                        st.dataframe(monthly_df, use_container_width=True)
+                
+                if 'day_of_week_performance' in time_metrics and time_metrics['day_of_week_performance']:
+                    st.write("**Day of Week Performance (MAE)**")
+                    dow_perf = time_metrics['day_of_week_performance']['mae']
+                    if dow_perf:
+                        dow_df = pd.DataFrame(list(dow_perf.items()), columns=['Day', 'MAE'])
+                        st.dataframe(dow_df, use_container_width=True)
+            else:
+                st.info("Time-based analysis not available - insufficient date information")
+        
+        # Add category-level analysis if we have category data
+        if selected_categories or not selected_categories:
+            st.subheader("📊 Category-Level Performance")
+            
+            # Calculate metrics by category
+            category_metrics = {}
+            categories_to_analyze = selected_categories if selected_categories else all_categories
+            
+            for category in categories_to_analyze:
+                cat_data = analysis_df[analysis_df['category'] == category]
+                if len(cat_data) < 5:  # Need minimum data
+                    continue
+                    
+                # Get backward results for this category (simplified approach)
+                cat_daily = cat_data.groupby('date')['amount'].sum().reindex(
+                    pd.date_range(start_date, end_date), fill_value=0
+                )
+                
+                if len(cat_daily) > 10:  # Need reasonable amount of data
+                    # Simple forecast using mean of last 7 days
+                    cat_forecast = cat_daily.rolling(window=7, min_periods=1).mean()
+                    
+                    valid_indices = ~(cat_daily.isna() | cat_forecast.isna())
+                    if valid_indices.sum() > 5:
+                        cat_metrics = calculate_forecast_metrics(
+                            actual=cat_daily[valid_indices].values,
+                            forecast=cat_forecast[valid_indices].values
+                        )
+                        category_metrics[category] = cat_metrics
+            
+            if category_metrics:
+                # Create summary table
+                category_summary = []
+                for cat, metrics in category_metrics.items():
+                    category_summary.append({
+                        'Category': cat,
+                        'MAPE': f"{metrics['percentage_metrics']['mape']:.1f}%",
+                        'MAE': f"${metrics['basic_metrics']['mae']:.2f}",
+                        'Hit Rate (±20%)': f"{metrics['directional_metrics']['hit_rate_20pct']:.1f}%",
+                        'Rating': metrics['overall_assessment']['overall_rating']
+                    })
+                
+                category_df = pd.DataFrame(category_summary)
+                st.dataframe(category_df, use_container_width=True)
+            else:
+                st.info("Category-level analysis requires more data per category")
     
     # Plot actual vs forecast over time
     fig = go.Figure()

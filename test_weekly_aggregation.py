@@ -1,10 +1,7 @@
 import pandas as pd
 import numpy as np
 import streamlit as st
-<<<<<<< HEAD
 import plotly.graph_objects as go
-=======
->>>>>>> 595a9bf1857c174548d23beaa8c4b7cf6644fd72
 from datetime import datetime, timedelta
 from forecast_utils import aggregate_daily_to_weekly, calculate_weekly_metrics, add_week_metadata
 

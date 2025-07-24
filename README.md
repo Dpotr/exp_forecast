@@ -9,10 +9,7 @@ This project is an interactive web dashboard for forecasting categorized expense
 - **Backtesting & KPI Tracking**: Performs rolling backtests and calculates MAE, RMSE, and MAPE to ensure forecast quality before publishing.
 - **Self-Correction**: Automatically updates and retrains models as new data arrives, ensuring adaptive and accurate predictions.
 - **Interactive Visualizations**: Stacked bar charts, forecast plots with confidence intervals, and KPI tables.
-<<<<<<< HEAD
 - **Forecast Diagnostics**: Enhanced diagnostics table displays MAE for each forecasting method with separate columns and features a date range selector to filter the analysis period.
-=======
->>>>>>> 595a9bf1857c174548d23beaa8c4b7cf6644fd72
 - **Country Regimes**: Highlights periods spent in different countries and uses these as features in the model.
 
 ## Usage
@@ -22,10 +19,7 @@ This project is an interactive web dashboard for forecasting categorized expense
    - The dashboard will automatically update online after each push to the GitHub repository.
    - Simply update your code, commit, and push to GitHub. The online dashboard will reflect the latest changes after a short delay.
 4. Explore raw data, monthly summaries, forecasts, and backtest KPIs in the browser.
-<<<<<<< HEAD
 5. Use the Diagnostics date range selector in the sidebar to filter per-category metrics over a custom analysis period.
-=======
->>>>>>> 595a9bf1857c174548d23beaa8c4b7cf6644fd72
 
 ## How forecasting works (for dummies)
 
@@ -58,34 +52,6 @@ This project is an interactive web dashboard for forecasting categorized expense
 - Compare performance across different expense types
 - Identify which categories are easiest/hardest to predict
 
-<<<<<<< HEAD
-## Monthly Bucket for Forecast Analysis
-
-A new feature has been added to the forecast accuracy analysis: the **Monthly Bucket**. This allows you to aggregate and analyze forecast performance at the calendar month level, in addition to the previously available daily and weekly buckets.
-
-### How It Works
-- In the timeframe selector (in the Streamlit UI), you can now choose **Monthly** alongside Daily and Weekly.
-- When Monthly is selected, all forecast and actual data are aggregated by calendar month.
-- The app computes summary metrics (total/average actual, forecast, errors, WAPE, MAPE, accuracy bands, etc.) for each month, and displays the results in plots and tables.
-- The monthly bucket is useful for high-level, long-term trend analysis and for identifying large-scale forecast deviations.
-
-### Limitations
-- **Forecast breakdown by category is NOT available for monthly bucket** (as with weekly), because category-level detail is lost during aggregation.
-- When Monthly is selected, the UI will show an info message instead of category breakdown tables.
-- Spike details and breakdowns are only available in Daily mode.
-
-### Usage
-- To use the monthly bucket, simply select "Monthly" in the timeframe selector in the app sidebar.
-- All summary metrics and main plots will update to show results by month.
-- X-axis and hover labels in plots will show the month for each data point.
-
-### Supported Metrics and Visualizations
-- All main forecast accuracy metrics are supported for monthly bucket: Total Actual, Total Forecast, Error, MAE, MAPE, WAPE, accuracy within ±10% and ±20%, etc.
-- Main time series plots and summary tables support monthly aggregation.
-- Category breakdown and spike details are only available for daily.
-
-=======
->>>>>>> 595a9bf1857c174548d23beaa8c4b7cf6644fd72
 ## Weekly Aggregation Feature
 
 The dashboard now includes a weekly aggregation view for backward forecast analysis, allowing you to analyze forecast performance at a weekly level to identify trends that might be less visible in daily data.
@@ -153,7 +119,6 @@ The model will:
   - Zero (no forecast)
 - **The method with the lowest MAE (Mean Absolute Error) in backtesting is selected automatically for forecasting.**
 
-<<<<<<< HEAD
 ### Method Applicability and Overrides
 
 - **Intermittent Demand:** Croston’s method is best suited for sparse or lumpy series with intermittent non-zero values.
@@ -162,8 +127,6 @@ The model will:
 - **Low Activity:** For series with fewer than 2 non-zero days in the activity window, the Periodic Spike method is used by default.
 - **Manual Override:** Switch to Manual mode in the Streamlit sidebar to explicitly select any forecasting method for comparison or specific use cases.
 
-=======
->>>>>>> 595a9bf1857c174548d23beaa8c4b7cf6644fd72
 ### 3. Forecasting Formulas
 - **Mean:**  
   `forecast = mean(amounts[-30:])`
@@ -302,15 +265,12 @@ You can now analyze both weekly and within-month seasonality in your expenses us
 
 ## Version History
 
-<<<<<<< HEAD
 ### v1.3.0 (2025-07-24)
 - Added Diagnostics date range selector for filtering the Diagnostics table.
 - Expanded All MAEs into separate columns in the Diagnostics table for clearer metrics.
 - Rolling backtests now consider the selected Diagnostics date range.
 - Improved UI tooltip placement for diagnostics metrics.
 
-=======
->>>>>>> 595a9bf1857c174548d23beaa8c4b7cf6644fd72
 ### v1.2.0 (2025-07-23)
 - Forecast horizon alignment: for any date displayed, the value is the forecast generated exactly *N* days earlier (where *N* is the selected Forecast Horizon). This ensures that the earliest days in the report window use truly "look-ahead" predictions.
 - The dashboard now automatically pulls an extra *horizon* days of data before the chosen start date so the underlying model has access to the information required to build those earlier forecasts.
@@ -324,20 +284,7 @@ You can now analyze both weekly and within-month seasonality in your expenses us
 - Added collapsible tooltips section for all metrics in the diagnostics table.
 - Improved code and UI clarity based on user feedback.
 
-<<<<<<< HEAD
-### [2025-07-24] Bugfix: Weekly view KeyError for forecast_breakdown
-- Исправлена ошибка KeyError при попытке построить breakdown по категориям для недельных (weekly) бакетов в разделе Spike Forecast Details.
-- Теперь при выборе недельного режима breakdown не отображается, а пользователю выводится информативное сообщение: breakdown по категориям доступен только для дневного режима.
-- Это связано с тем, что при агрегации по неделям детальная структура breakdown теряется и не может быть корректно отображена.
-
-**Особенности:**
-- В дневном (daily) режиме breakdown по категориям доступен для анализа аномалий.
-- В недельном (weekly) режиме breakdown по категориям не формируется и не отображается.
-
-
-=======
 ## Requirements
->>>>>>> 595a9bf1857c174548d23beaa8c4b7cf6644fd72
 - Python 3.8+
 - See `requirements.txt` for dependencies
 
@@ -351,14 +298,10 @@ GitHub: [https://github.com/Dpotr/exp_forecast](https://github.com/Dpotr/exp_for
 
 ---
 
-<<<<<<< HEAD
 **Note (July 2025):**
 - Backward Forecast Performance now only supports Daily view. Weekly and Monthly bucket aggregation has been removed to simplify analysis and avoid confusion.
 
 **Historical Notes (April 2025):**
-=======
-**Note (April 2025):**
->>>>>>> 595a9bf1857c174548d23beaa8c4b7cf6644fd72
 - The dashboard and forecast exports now show only the main forecast value for each day/category.
 - Lower/upper confidence intervals are no longer included, as they were not consistently available or meaningful for all methods.
 - This change simplifies the results and avoids confusion from empty columns.

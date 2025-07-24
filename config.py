@@ -31,8 +31,18 @@ class Config:
         self.OUTLIER_WINDOW_DAYS = 60
         self.OUTLIER_Z_THRESHOLD = 3
         self.ANOMALY_Z_THRESHOLD = 3
+        self.ANOMALY_WINDOW_DAYS = 60
+        self.ANOMALY_MIN_TRANSACTIONS = 10
         self.MIN_RECURRING_PERIODS = 3
         self.RECURRING_THRESHOLD = 0.7
+        self.RECURRING_STD_THRESHOLD = 3
+        self.ROLLING_WINDOW_DAYS = 7
+        
+        # Enhanced anomaly detection settings
+        self.IQR_MULTIPLIER = 1.5
+        self.SEASONAL_WINDOW = 30
+        self.MIN_BASELINE_DAYS = 14
+        self.ANOMALY_CONFIDENCE_LEVEL = 0.95
         
         # Forecast method names
         self.FORECAST_METHODS = ["mean", "median", "zero", "croston", "prophet", "periodic_spike"]
