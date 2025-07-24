@@ -12,7 +12,6 @@ if not config.file_exists(daily_path):
     print(f"Warning: Daily payments file not found at {daily_path}")
     print("Set the DAILY_PAYMENTS_PATH environment variable to the correct path")
     exit(1)
-
 df_daily = pd.read_excel(daily_path, sheet_name='data')
 
 # Try to robustly find columns

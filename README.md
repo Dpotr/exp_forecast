@@ -319,6 +319,7 @@ You can now analyze both weekly and within-month seasonality in your expenses us
 - В недельном (weekly) режиме breakdown по категориям не формируется и не отображается.
 
 
+## Requirements
 - Python 3.8+
 - See `requirements.txt` for dependencies
 
@@ -336,6 +337,7 @@ GitHub: [https://github.com/Dpotr/exp_forecast](https://github.com/Dpotr/exp_for
 - Backward Forecast Performance now only supports Daily view. Weekly and Monthly bucket aggregation has been removed to simplify analysis and avoid confusion.
 
 **Historical Notes (April 2025):**
+**Note (April 2025):**
 - The dashboard and forecast exports now show only the main forecast value for each day/category.
 - Lower/upper confidence intervals are no longer included, as they were not consistently available or meaningful for all methods.
 - This change simplifies the results and avoids confusion from empty columns.
