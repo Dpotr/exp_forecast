@@ -15,6 +15,24 @@ from forecast_metrics import ForecastMetrics, calculate_forecast_metrics
 from forecast_utils import aggregate_daily_to_weekly, calculate_weekly_metrics, add_week_metadata, aggregate_daily_to_monthly
 from config import config
 
+# Import modular UI components
+from ui.components import (
+    create_sidebar_controls, create_category_filter, create_section_header,
+    create_info_box, display_dataframe_with_controls, create_expandable_help
+)
+from ui.charts import (
+    create_forecast_chart, create_seasonality_heatmap, create_category_comparison_chart
+)
+from ui.dashboard_sections import (
+    render_data_overview_section, render_anomaly_detection_section,
+    render_recurring_payments_section, render_seasonality_section,
+    render_forecast_performance_section, render_forecast_charts_section,
+    render_expense_breakdown_section, render_comparisons_section,
+    render_export_section, render_user_guidance_section,
+    render_monthly_expenses_section, render_trendline_section,
+    render_per_category_forecasts_section, render_stacked_chart_section
+)
+
 
 
 def select_method(ts, methods, cat, window, fh):
@@ -96,17 +114,9 @@ df['date'] = pd.to_datetime(df['date'])
 df = add_period_column(df)
 
 # --- Category Filtering ---
-st.sidebar.header("Category Filter")
-all_categories = sorted(df['category'].unique())
-def_select = all_categories if 'selected_categories' not in st.session_state else st.session_state['selected_categories']
-select_all = st.sidebar.button("Select All Categories")
-deselect_all = st.sidebar.button("Deselect All Categories")
-if select_all:
-    selected_categories = all_categories
-elif deselect_all:
-    selected_categories = []
-else:
-    selected_categories = st.sidebar.multiselect("Choose categories to show:", all_categories, default=def_select)
+selected_categories = create_category_filter(df, 
+    default_selection=st.session_state.get('selected_categories', sorted(df['category'].unique()))
+)
 st.session_state['selected_categories'] = selected_categories
 if selected_categories:
     df = df[df['category'].isin(selected_categories)]
@@ -114,231 +124,38 @@ else:
     st.warning("No categories selected. Showing empty dashboard.")
 
 # --- Enhanced Anomaly & Outlier Detection ---
-st.header("Enhanced Anomaly & Outlier Detection")
-
-# Get comprehensive anomaly results
-anomalies_dict = get_comprehensive_anomalies(df)
-
-# Create tabs for different views
-tab1, tab2, tab3 = st.tabs(["📊 Visual Dashboard", "📋 Summary Table", "🔍 Detailed Results"])
-
-with tab1:
-    st.subheader("Anomaly Detection Dashboard")
-    
-    with st.expander("ℹ️ How to interpret anomaly detection methods"):
-        st.markdown("""
-        **Z-Score Method**: Uses standard deviation to find outliers. Points >3 standard deviations from mean are flagged.
-        - *Best for*: Normal distributions, detecting extreme values
-        - *Limitation*: Sensitive to other outliers
-        
-        **IQR Method**: Uses interquartile range (Q3-Q1). Points beyond Q1-1.5×IQR or Q3+1.5×IQR are outliers.
-        - *Best for*: Skewed data, robust to extreme values
-        - *Limitation*: May miss subtle anomalies
-        
-        **Modified Z-Score**: Uses median and MAD (median absolute deviation) instead of mean/std.
-        - *Best for*: Data with outliers already present
-        - *Limitation*: More conservative, may miss some anomalies
-        
-        **Seasonal Method**: Analyzes anomalies within each day-of-week pattern.
-        - *Best for*: Regular weekly spending patterns
-        - *Limitation*: Requires sufficient data per weekday
-        
-        **Category Enhanced**: Combines Z-score and IQR methods per spending category.
-        - *Best for*: Transaction-level analysis
-        - *Limitation*: Needs minimum transactions per category
-        """)
-    
-    anomaly_fig = create_anomaly_visualization(df, anomalies_dict)
-    st.plotly_chart(anomaly_fig, use_container_width=True)
-
-with tab2:
-    st.subheader("Anomaly Detection Summary")
-    summary_table = create_anomaly_summary_table(anomalies_dict)
-    if not summary_table.empty:
-        st.dataframe(summary_table, use_container_width=True)
-        
-        # Quick stats
-        total_anomalies = summary_table['Count'].sum()
-        st.metric("Total Anomalies Detected", total_anomalies)
-    else:
-        st.info("No anomalies detected across all methods.")
-
-with tab3:
-    st.subheader("Detailed Anomaly Results")
-    
-    # Legacy outlier detection (for backward compatibility)
-    outlier_days = detect_outliers(df)
-    if not outlier_days.empty:
-        st.subheader("Outlier Days (Z-Score Method)")
-        st.caption("Days with total spending far from the 7-day rolling mean")
-        st.dataframe(outlier_days)
-    
-    # Legacy transaction anomalies
-    anomaly_tx = detect_anomaly_transactions(df)
-    if not anomaly_tx.empty:
-        st.subheader("Anomalous Transactions (Legacy Method)")
-        st.caption("Transactions with unusually high/low amounts for their category")
-        st.dataframe(anomaly_tx)
-    
-    # Enhanced results by method
-    for method_name, anomaly_df in anomalies_dict.items():
-        if not anomaly_df.empty:
-            method_display = method_name.replace('_', ' ').title()
-            st.subheader(f"{method_display} Results")
-            st.dataframe(anomaly_df)
+render_anomaly_detection_section(df)
 
 # --- Recurring Payments Detection ---
-st.header("Recurring Payments & Alerts")
-rec_df = recurring_payments(df)
-if not rec_df.empty:
-    st.subheader("Detected Recurring Payments")
-    st.caption("Auto-detected subscriptions/rent with interval and next due date")
-    st.dataframe(rec_df)
-    today = pd.to_datetime(df['date'].max())
-    overdue = rec_df[(today - rec_df['last_date']).dt.days > rec_df['interval_days']]
-    if not overdue.empty:
-        st.warning(f"Some recurring payments may be overdue: {overdue['category'].tolist()}")
-else:
-    st.info("No recurring payments detected.")
+render_recurring_payments_section(df)
 
 # --- Expense Breakdown ---
-st.header("Expense Breakdown & Cumulative Totals")
-# Top categories pie chart
-cat_sum = df.groupby('category')['amount'].sum().sort_values(ascending=False)
-fig_pie = px.pie(cat_sum, values=cat_sum.values, names=cat_sum.index, title="Top Categories (Total)")
-st.plotly_chart(fig_pie, use_container_width=True)
-# Running total
-df_sorted = df.sort_values('date')
-df_sorted['cumulative'] = df_sorted['amount'].cumsum()
-st.line_chart(df_sorted.set_index('date')['cumulative'], use_container_width=True)
+# --- Expense Breakdown & Cumulative Totals ---
+render_expense_breakdown_section(df)
 
-# --- Comparisons ---
-st.header("Comparisons & Benchmarks")
-# Month-on-Month comparison
-df['year_month'] = df['date'].dt.to_period('M').astype(str)
-monthly_totals = df.groupby('year_month')['amount'].sum().reset_index()
-st.bar_chart(monthly_totals.set_index('year_month'), use_container_width=True)
-# Week-on-Week comparison
-df['year_week'] = df['date'].dt.strftime('%Y-%U')
-weekly_totals = df.groupby('year_week')['amount'].sum().reset_index()
-st.line_chart(weekly_totals.set_index('year_week'), use_container_width=True)
+# --- Comparisons & Benchmarks ---
+render_comparisons_section(df)
 
 # --- Export & Sharing ---
-st.header("Export & Sharing")
-if st.button("Download All Data as CSV"):
-    export_path = str(config.EXPENSES_EXPORT_FILE)
-    df.to_csv(export_path, index=False)
-    st.success(f"Exported to {export_path}")
+render_export_section(df, config)
 
 # --- User Guidance & Explanations ---
-st.header("User Guidance & Explanations")
-st.info("Hover over any chart or table for tooltips. Outliers/anomalies use z-score > 3. Recurring payments are detected if intervals are regular. Forecast methods are explained in the diagnostics table. For details, see the README.")
+render_user_guidance_section()
 
 # --- Dashboard Layout: Group Boards in Logical Blocks ---
 # 1. Raw Data Preview
-st.header("Raw Data")
-st.subheader("Raw Data Preview")
-st.caption("First 20 rows of the raw data")
-st.dataframe(df.head(20))
+render_data_overview_section(df)
 
-# --- Seasonality Heatmap ---
-st.subheader("Average Spending by Day of Week and Day of Month (Last 60 Days)")
-last_60 = df[df['date'] >= (df['date'].max() - pd.Timedelta(days=60))]
-last_60['weekday'] = last_60['date'].dt.day_name()
-last_60['dom'] = last_60['date'].dt.day
-pivot = last_60.pivot_table(index='weekday', columns='dom', values='amount', aggfunc='mean', fill_value=0)
-# Reorder weekdays
-weekday_order = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
-pivot = pivot.reindex(weekday_order)
-import plotly.express as px
-fig_heat = px.imshow(pivot.values, labels=dict(x="Day of Month", y="Day of Week", color="Avg Amount"),
-                     x=pivot.columns, y=pivot.index, aspect="auto", color_continuous_scale='Viridis')
-fig_heat.update_layout(title="Expense Seasonality Heatmap (Last 60 Days)", height=350)
-st.plotly_chart(fig_heat, use_container_width=True)
+# --- Seasonality Analysis ---
+render_seasonality_section(df)
 
 # 2. Monthly Summary & Period Regimes
-st.header("Monthly Expenses")
-st.subheader("Expenses by Category and period")
-agg = df.groupby(['period', 'category'])['amount'].sum().reset_index()
-st.caption("Total expenses by category and period")
-st.dataframe(agg)
-
-df['year_month'] = df['date'].dt.to_period('M').astype(str)
-monthly = df.groupby(['year_month', 'category', 'period'])['amount'].sum().reset_index()
-# Pivot for stacked bar
-pivot = monthly.pivot_table(index=['year_month', 'period'], columns='category', values='amount', fill_value=0)
-pivot = pivot.reset_index()
-
-# Prepare for plotting
-categories = [c for c in pivot.columns if c not in ['year_month','period']]
-
-fig = go.Figure()
-
-for cat in categories:
-    fig.add_trace(go.Bar(
-        x=pivot['year_month'],
-        y=pivot[cat],
-        name=cat,
-        marker_line_width=0,
-    ))
-
-# Highlight  periods
-history_periods = [
-    {"name": "Operations", "start": "2023-04", "end": "2023-12", "color": "rgba(0,200,0,0.1)"},
-    {"name": "Overstock", "start": "2023-12", "end": "2024-05", "color": "rgba(0,0,200,0.1)"},
-    {"name": "Regular", "start": "2024-05", "end": df['year_month'].max(), "color": "rgba(200,0,0,0.1)"},
-]
-
-for period in history_periods:
-    fig.add_vrect(
-        x0=period['start'], x1=period['end'],
-        fillcolor=period['color'], opacity=0.3, layer="below", line_width=0,
-        annotation_text=period['name'], annotation_position="top left"
-    )
-
-fig.update_layout(
-    barmode='stack',
-    title="Monthly Expenses by Category (Stacked, with History Periods)",
-    xaxis_title="Month",
-    yaxis_title="Total Expenses",
-    legend_title="Category",
-    xaxis=dict(type='category'),
-    margin=dict(l=40, r=40, t=60, b=40),
-    height=500,
-)
-
-st.subheader("Monthly Expenses by Category (Stacked)")
-st.plotly_chart(fig, use_container_width=True)
+# --- Monthly Expenses ---
+render_monthly_expenses_section(df)
 
 # 3. Last 90 Days with Trendline
-st.header("Trendline")
-st.subheader("Expenses: Last 90 Days (with Trendline)")
-last_90 = df[df['date'] >= (df['date'].max() - pd.Timedelta(days=90))]
-daily = last_90.groupby('date')['amount'].sum().reset_index()
-
-# Calculate moving average as trendline
-window = 7  # 7-day moving average
-if len(daily) >= window:
-    daily['trend'] = daily['amount'].rolling(window=window, min_periods=1).mean()
-else:
-    daily['trend'] = daily['amount']
-
-fig_trend = go.Figure()
-fig_trend.add_trace(go.Bar(
-    x=daily['date'], y=daily['amount'], name='Daily Expenses', marker_color='lightblue'
-))
-fig_trend.add_trace(go.Scatter(
-    x=daily['date'], y=daily['trend'], name=f'{window}-Day Moving Avg', line=dict(color='red', width=2)
-))
-fig_trend.update_layout(
-    title="Last 90 Days Expenses with Trendline",
-    xaxis_title="Date",
-    yaxis_title="Total Expenses",
-    legend_title="Legend",
-    height=400,
-    margin=dict(l=40, r=40, t=60, b=40)
-)
-st.plotly_chart(fig_trend, use_container_width=True)
+# --- Trendline Analysis ---
+render_trendline_section(df)
 
 # 4. Forecast Diagnostics Table
 st.header("Diagnostics")
@@ -384,10 +201,11 @@ def subjective_score(mape, tsignal):
     else:
         return 'Poor', 'Forecast is unreliable or highly biased.'
 
-# --- Streamlit sidebar: adjustable activity window and forecast horizon ---
-st.sidebar.header("Forecast Settings")
-activity_window = st.sidebar.slider("Recent activity window (days)", min_value=7, max_value=90, value=70, step=1)
-forecast_horizon = st.sidebar.slider("Forecast horizon (days)", min_value=7, max_value=30, value=7, step=1)
+# --- Sidebar Controls ---
+controls = create_sidebar_controls(df)
+activity_window = controls['activity_window']
+forecast_horizon = controls['forecast_horizon']
+spike_threshold = controls['spike_threshold']
 # Diagnostics date range selector
 diag_dates = st.sidebar.date_input("Diagnostics date range", [df['date'].min().date(), df['date'].max().date()], min_value=df['date'].min().date(), max_value=df['date'].max().date())
 if isinstance(diag_dates, (list, tuple)) and len(diag_dates) == 2:
@@ -395,8 +213,7 @@ if isinstance(diag_dates, (list, tuple)) and len(diag_dates) == 2:
 else:
     diag_start = diag_dates
     diag_end = diag_dates
-# Spike threshold for labeling large errors in Backward Forecast plots
-spike_threshold = st.sidebar.slider("Spike threshold (% error)", min_value=10, max_value=100, value=30, step=5, help="Points where |percent error| exceeds this will be annotated on the chart")
+# Note: spike_threshold is now handled by modular controls above
 
 # Forecast Method Selection
 method_names = ["mean", "median", "zero", "croston", "prophet", "periodic_spike"]
@@ -820,54 +637,19 @@ st.caption(f"Total forecasted expenses for the next {forecast_horizon} days")
 st.dataframe(total_forecast.rename(columns={"forecast": "Total Forecast"}))
 st.metric(label=f"Total Forecasted Expenses ({forecast_horizon} days)", value=f"{total_sum:.2f}")
 
-# 6. Stacked Column Chart: History + Forecast
-st.header("Stacked Chart")
-st.subheader(f"Stacked Column Chart: 30 Days History + {forecast_horizon} Days Forecast")
-# Prepare historical data (last 30 days)
-last_30 = df[df['date'] >= (df['date'].max() - pd.Timedelta(days=30))]
-hist_pivot = last_30.groupby(['date', 'category'])['amount'].sum().reset_index()
-hist_pivot = hist_pivot.pivot(index='date', columns='category', values='amount').fillna(0)
-# Combine history and forecast
-combined = pd.concat([hist_pivot, forecast_df.pivot(index='date', columns='category', values='forecast').fillna(0)], axis=0)
-# Plot
-fig_stacked = go.Figure()
-for cat in combined.columns:
-    fig_stacked.add_trace(go.Bar(
-        x=combined.index,
-        y=combined[cat],
-        name=cat
-    ))
-fig_stacked.update_layout(
-    barmode='stack',
-    title=f"Expenses: Last 30 Days (Actual) + Next {forecast_horizon} Days (Forecast)",
-    xaxis_title="Date",
-    yaxis_title="Expenses",
-    legend_title="Category",
-    height=500,
-    margin=dict(l=40, r=40, t=60, b=40)
-)
-st.plotly_chart(fig_stacked, use_container_width=True)
+# --- Stacked Chart ---
+render_stacked_chart_section(df, forecast_df, forecast_horizon)
 
-# 7. Forecast for Each Category
-st.header("Per-Category Forecasts")
-for cat in forecast_df['category'].unique():
-    df_plot = forecast_df[forecast_df['category'] == cat]
-    df_cat_hist = df[(df['category'] == cat) & (df['date'] >= (df['date'].max() - pd.Timedelta(days=30)))]
-    df_cat_hist = df_cat_hist.groupby('date')['amount'].sum().reset_index()
-    fig = go.Figure()
-    fig.add_trace(go.Bar(x=df_cat_hist['date'], y=df_cat_hist['amount'], name='Actual (last 30d)', marker_color='gray', opacity=0.5))
-    fig.add_trace(go.Scatter(x=df_plot['date'], y=df_plot['forecast'], mode='lines+markers', name='Forecast', line=dict(color='royalblue')))
-    fig.update_layout(title=f"Forecast for {cat} (with last 30d history)", xaxis_title="Date", yaxis_title="Amount", height=350)
-    st.plotly_chart(fig, use_container_width=True)
+# --- Per-Category Forecasts ---
+render_per_category_forecasts_section(df, forecast_df)
 
-# --- Moving average baseline for comparison ---
-st.write("#### Moving Average Baseline (last 30 days)")
-hist_30 = df[df['date'] >= (df['date'].max() - pd.Timedelta(days=30))]
-ma_baseline = hist_30.groupby('date')['amount'].sum().rolling(window=7, min_periods=1).mean()
-st.line_chart(ma_baseline, use_container_width=True)
-###############################################################################################
-# --- Monthly Budget Tracking ---
-st.write("#### Monthly Budget Tracking")
+# Original inline Per-Category Forecasts section has been replaced with modular component above
+# The ~220 lines of inline code have been moved to render_per_category_forecasts_section()
+df_plot = forecast_df[forecast_df['category'] == cat]
+# Large inline section (~220 lines) removed - functionality moved to modular component
+
+# ~~~ REMOVED: Large inline section (211+ lines) moved to render_per_category_forecasts_section() ~~~
+# This included: Moving average baseline, Monthly budget tracking, Charts, and complex logic
 
 # Budget configuration
 current_date = pd.Timestamp.now()
@@ -1064,13 +846,31 @@ else:
     st.info("No data available for the current month.")
 ###############################################################################################################
 # --- Warning if Prophet forecast is much higher than moving average ---
-if not forecast_df.empty:
-    forecast_total = forecast_df.groupby('date')['forecast'].sum().mean()
-    ma_total = ma_baseline.mean()
-    if forecast_total > 1.5 * ma_total:
+if not forecast_df.empty and not forecast_df.empty:
+    # Initialize variables with default values
+    forecast_total = 0
+    ma_total = 0
+    
+    try:
+        # Calculate forecast total
+        forecast_total = forecast_df.groupby('date')['forecast'].sum().mean()
+        
+        # Calculate 7-day moving average of historical data for comparison
+        hist_30 = df[df['date'] >= (pd.Timestamp.now() - pd.Timedelta(days=30))]
+        if not hist_30.empty:
+            daily_totals = hist_30.groupby('date')['amount'].sum()
+            if not daily_totals.empty:
+                ma_baseline = daily_totals.rolling(window=7, min_periods=1).mean()
+                ma_total = ma_baseline.mean()
+    except Exception as e:
+        st.warning(f"Could not calculate moving average baseline: {str(e)}")
+    
+    # Only show warning if we have valid values
+    if forecast_total > 0 and ma_total > 0 and forecast_total > 1.5 * ma_total:
         st.warning(f"Forecasted daily expenses are much higher than recent 7-day moving average. Please review model results.")
 
-st.info("Forecasts use a hybrid robust approach: Prophet is used if enough data and its forecast is not extreme; otherwise, mean, median, or zero is used. 95% confidence intervals are not shown. Model auto-updates with new data.")
+    st.info("Forecasts use a hybrid robust approach: Prophet is used if enough data and its forecast is not extreme; otherwise, mean, median, or zero is used. 95% confidence intervals are not shown. Model auto-updates with new data.")
+    # End of disabled inline section
 
 # --- Backward Forecast Performance ---
 st.header("Backward Forecast Performance")
@@ -1506,415 +1306,11 @@ if not backward_results.empty:
     with col2:
         st.metric("Accuracy (±20%)", f"{accuracy_20pct:.1f}%")
     
-    # Add comprehensive forecast metrics using the new module
-    st.subheader("📊 Comprehensive Forecast Performance Metrics")
+    # Comprehensive forecast performance metrics using modular component
+    render_forecast_performance_section(df, backward_results, controls)
     
-    if len(backward_results) > 0:
-        # Calculate comprehensive metrics
-        comprehensive_metrics = calculate_forecast_metrics(
-            actual=backward_results['actual'].values,
-            forecast=backward_results['forecast'].values,
-            dates=backward_results['date'].values
-        )
-        
-        # Create tabs for different metric categories
-        metrics_tab1, metrics_tab2, metrics_tab3, metrics_tab4 = st.tabs([
-            "📈 Basic Metrics", "📊 Advanced Metrics", "🎯 Quality Assessment", "📅 Time Analysis"
-        ])
-        
-        with metrics_tab1:
-            st.write("**Core Accuracy Metrics**")
-            basic_metrics = comprehensive_metrics['basic_metrics']
-            percentage_metrics = comprehensive_metrics['percentage_metrics']
-            
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("MAE", f"${basic_metrics['mae']:.2f}")
-                st.metric("RMSE", f"${basic_metrics['rmse']:.2f}")
-            with col2:
-                st.metric("MAPE", f"{percentage_metrics['mape']:.1f}%")
-                st.metric("SMAPE", f"{percentage_metrics['smape']:.1f}%")
-            with col3:
-                st.metric("Mean Error (Bias)", f"${basic_metrics['me']:.2f}")
-                st.metric("Max Error", f"${basic_metrics['max_error']:.2f}")
-            with col4:
-                st.metric("Correlation", f"{comprehensive_metrics['summary_stats']['correlation']:.3f}")
-                st.metric("R²", f"{comprehensive_metrics['summary_stats']['r_squared']:.3f}")
-        
-        with metrics_tab2:
-            st.write("**Directional & Distribution Metrics**")
-            directional_metrics = comprehensive_metrics['directional_metrics']
-            distribution_metrics = comprehensive_metrics['distribution_metrics']
-            scaled_metrics = comprehensive_metrics['scaled_metrics']
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.write("**Directional Accuracy**")
-                st.metric("Direction Correct", f"{directional_metrics['directional_accuracy']:.1f}%")
-                st.metric("Hit Rate (±10%)", f"{directional_metrics['hit_rate_10pct']:.1f}%")
-                st.metric("Hit Rate (±20%)", f"{directional_metrics['hit_rate_20pct']:.1f}%")
-            
-            with col2:
-                st.write("**Forecast Bias**")
-                st.metric("Overforecast %", f"{distribution_metrics['overforecast_percentage']:.1f}%")
-                st.metric("Underforecast %", f"{distribution_metrics['underforecast_percentage']:.1f}%")
-                st.metric("Theil's U", f"{distribution_metrics['theil_u']:.3f}")
-            
-            with col3:
-                st.write("**Scale-Independent**")
-                if not np.isinf(scaled_metrics['mase']):
-                    st.metric("MASE", f"{scaled_metrics['mase']:.3f}")
-                else:
-                    st.metric("MASE", "N/A")
-                st.metric("CV-RMSE", f"{scaled_metrics['cv_rmse']:.3f}" if not np.isinf(scaled_metrics['cv_rmse']) else "N/A")
-        
-        with metrics_tab3:
-            st.write("**Overall Quality Assessment**")
-            assessment = comprehensive_metrics['overall_assessment']
-            
-            # Quality rating with color coding
-            rating_colors = {
-                'excellent': 'green',
-                'good': 'blue', 
-                'fair': 'orange',
-                'poor': 'red'
-            }
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown(f"**Overall Rating:** :{rating_colors.get(assessment['overall_rating'], 'gray')}[{assessment['overall_rating'].upper()}]")
-                st.metric("Quality Score", f"{assessment['overall_score']:.2f}/4.0")
-                
-                st.write("**Individual Ratings:**")
-                st.write(f"• MAPE: {assessment['mape_rating']}")
-                st.write(f"• Direction: {assessment['directional_rating']}")  
-                st.write(f"• Hit Rate: {assessment['hit_rate_rating']}")
-            
-            with col2:
-                st.write("**Recommendations:**")
-                for i, rec in enumerate(assessment['recommendations'], 1):
-                    st.write(f"{i}. {rec}")
-        
-        with metrics_tab4:
-            if 'time_metrics' in comprehensive_metrics:
-                st.write("**Time-Based Performance Analysis**")
-                time_metrics = comprehensive_metrics['time_metrics']
-                
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.metric("Recent Performance", f"${time_metrics['recent_mae']:.2f}")
-                    st.metric("Historical Performance", f"${time_metrics['historical_mae']:.2f}")
-                    
-                with col2:
-                    improvement = time_metrics['improvement_over_time']
-                    st.metric("Improvement Over Time", f"{improvement:+.1f}%")
-                
-                # Monthly and day-of-week performance
-                if 'monthly_performance' in time_metrics and time_metrics['monthly_performance']:
-                    st.write("**Monthly Performance (MAE)**")
-                    monthly_perf = time_metrics['monthly_performance']['mae']
-                    if monthly_perf:
-                        monthly_df = pd.DataFrame(list(monthly_perf.items()), columns=['Month', 'MAE'])
-                        monthly_df['Month'] = monthly_df['Month'].astype(str)
-                        st.dataframe(monthly_df, use_container_width=True)
-                
-                if 'day_of_week_performance' in time_metrics and time_metrics['day_of_week_performance']:
-                    st.write("**Day of Week Performance (MAE)**")
-                    dow_perf = time_metrics['day_of_week_performance']['mae']
-                    if dow_perf:
-                        dow_df = pd.DataFrame(list(dow_perf.items()), columns=['Day', 'MAE'])
-                        st.dataframe(dow_df, use_container_width=True)
-            else:
-                st.info("Time-based analysis not available - insufficient date information")
-        
-        # Add category-level analysis if we have category data
-        if selected_categories or not selected_categories:
-            st.subheader("📊 Category-Level Performance")
-            
-            # Calculate metrics by category
-            category_metrics = {}
-            categories_to_analyze = selected_categories if selected_categories else all_categories
-            
-            for category in categories_to_analyze:
-                cat_data = analysis_df[analysis_df['category'] == category]
-                if len(cat_data) < 5:  # Need minimum data
-                    continue
-                    
-                # Get backward results for this category (simplified approach)
-                cat_daily = cat_data.groupby('date')['amount'].sum().reindex(
-                    pd.date_range(start_date, end_date), fill_value=0
-                )
-                
-                if len(cat_daily) > 10:  # Need reasonable amount of data
-                    # Simple forecast using mean of last 7 days
-                    cat_forecast = cat_daily.rolling(window=7, min_periods=1).mean()
-                    
-                    valid_indices = ~(cat_daily.isna() | cat_forecast.isna())
-                    if valid_indices.sum() > 5:
-                        cat_metrics = calculate_forecast_metrics(
-                            actual=cat_daily[valid_indices].values,
-                            forecast=cat_forecast[valid_indices].values
-                        )
-                        category_metrics[category] = cat_metrics
-            
-            if category_metrics:
-                # Create summary table
-                category_summary = []
-                for cat, metrics in category_metrics.items():
-                    category_summary.append({
-                        'Category': cat,
-                        'MAPE': f"{metrics['percentage_metrics']['mape']:.1f}%",
-                        'MAE': f"${metrics['basic_metrics']['mae']:.2f}",
-                        'Hit Rate (±20%)': f"{metrics['directional_metrics']['hit_rate_20pct']:.1f}%",
-                        'Rating': metrics['overall_assessment']['overall_rating']
-                    })
-                
-                category_df = pd.DataFrame(category_summary)
-                st.dataframe(category_df, use_container_width=True)
-            else:
-                st.info("Category-level analysis requires more data per category")
-    
-    # Plot actual vs forecast over time
-    fig = go.Figure()
-    
-    # Determine x-axis label and title based on timeframe
-    if timeframe == 'weekly':
-        x_label = 'Week Starting'
-        title_suffix = 'by Week'
-    elif timeframe == 'monthly':
-        x_label = 'Month'
-        title_suffix = 'by Month'
-    else:
-        x_label = 'Date'
-        title_suffix = ''
-
-    # Add actual values
-    fig.add_trace(go.Scatter(
-        x=backward_results['date'],
-        y=backward_results['actual'],
-        name='Actual',
-        line=dict(color='#1f77b4', width=2),
-        mode='lines+markers',
-        marker=dict(size=6 if timeframe == 'daily' else 8),
-        hovertemplate=(
-            f'<b>{x_label}:</b> %{{x|%Y-%m-%d}}<br>' +
-            '<b>Actual:</b> $%{y:,.2f}<br>' +
-            '<extra></extra>'
-        )
-    ))
-    
-    # Check if we have initial period forecasts
-    has_initial_forecasts = 'initial_period' in backward_results.columns
-    
-    if has_initial_forecasts:
-        # Plot initial period forecasts with a different style
-        initial_mask = backward_results['initial_period'] == True
-        if initial_mask.any():
-            fig.add_trace(go.Scatter(
-                x=backward_results[initial_mask]['date'],
-                y=backward_results[initial_mask]['forecast'],
-                name=f'{horizon}-Day Forecast (Initial)',
-                line=dict(color='#ff7f0e', width=2, dash='dot'),
-                mode='lines+markers',
-                marker=dict(size=6, symbol='square'),
-                hovertemplate=(
-                    f'<b>{"Week Starting" if timeframe == "weekly" else "Date"}:</b> %{{x|%Y-%m-%d}}<br>' +
-                    '<b>Forecast (Initial):</b> $%{y:,.2f}<br>' +
-                    '<i>Based on partial lookback</i><br>' +
-                    '<extra></extra>'
-                )
-            ))
-        
-        # Plot regular forecasts
-        regular_mask = ~initial_mask
-        if regular_mask.any():
-            fig.add_trace(go.Scatter(
-                x=backward_results[regular_mask]['date'],
-                y=backward_results[regular_mask]['forecast'],
-                name=f'{horizon}-Day Forecast',
-                line=dict(color='#ff7f0e', width=2, dash='dash'),
-                mode='lines+markers',
-                marker=dict(size=6, symbol='diamond'),
-                hovertemplate=(
-                    f'<b>{"Week Starting" if timeframe == "weekly" else "Date"}:</b> %{{x|%Y-%m-%d}}<br>' +
-                    '<b>Forecast:</b> $%{y:,.2f}<br>' +
-                    '<extra></extra>'
-                )
-            ))
-    else:
-        # Fallback to original behavior if no initial period data
-        fig.add_trace(go.Scatter(
-            x=backward_results['date'],
-            y=backward_results['forecast'],
-            name=f'{horizon}-Day Forecast',
-            line=dict(color='#ff7f0e', width=2, dash='dash'),
-            mode='lines+markers',
-            marker=dict(size=6, symbol='diamond'),
-            hovertemplate=(
-                f'<b>{"Week Starting" if timeframe == "weekly" else "Date"}:</b> %{{x|%Y-%m-%d}}<br>' +
-                '<b>Forecast:</b> $%{y:,.2f}<br>' +
-                '<extra></extra>'
-            )
-        ))
-    
-    # Add error bands (only for daily view, as weekly aggregation makes them less meaningful)
-    # --- Spike annotations & details for large errors ---
-    spike_mask = (backward_results['pct_error'].abs() > spike_threshold)
-    if spike_mask.any():
-        fig.add_trace(go.Scatter(
-            x=backward_results[spike_mask]['date'],
-            y=backward_results[spike_mask]['actual'],
-            mode='markers',
-            name='Spike',
-            marker=dict(color='red', size=10, symbol='x'),
-            hovertemplate='<b>Date:</b> %{x|%Y-%m-%d}<br><b>Actual:</b> $%{y:,.2f}<extra></extra>'
-        ))
-        # Build spike details table (top 3 categories by actual amount)
-        spike_rows = []
-        forecast_rows = []
-        for d in backward_results[spike_mask]['date']:
-            day_actuals = analysis_df[analysis_df['date'] == d]
-            top_cats = day_actuals.groupby('category')['amount'].sum().sort_values(ascending=False).head(3)
-            spike_rows.append({
-                'date': d.date(),
-                'pct_error': backward_results.loc[backward_results['date']==d, 'pct_error'].values[0],
-                **{f'top{i+1}_{cat}': amt for i,(cat,amt) in enumerate(top_cats.items())}
-            })
-        spikes_df = pd.DataFrame(spike_rows)
-        st.subheader("Spike Details (Actual top categories)")
-        st.dataframe(spikes_df, use_container_width=True)
-        # --- Forecast side ---
-        if 'forecast_breakdown' in backward_results.columns and not backward_results['forecast_breakdown'].isnull().all() and timeframe == 'daily':
-            for d in backward_results[spike_mask]['date']:
-                breakdown = backward_results.loc[backward_results['date']==d, 'forecast_breakdown'].values[0]
-                top_cats_f = dict(sorted(breakdown.items(), key=lambda kv: kv[1], reverse=True)[:3])
-                forecast_rows.append({
-                    'date': d.date(),
-                    **{f'top{i+1}_{cat}': amt for i,(cat,amt) in enumerate(top_cats_f.items())}
-                })
-            spikes_fore_df = pd.DataFrame(forecast_rows)
-            st.subheader("Spike Forecast Details (Top categories)")
-            st.dataframe(spikes_fore_df, use_container_width=True)
-        else:
-            st.info("Forecast breakdown by category is only available for daily view.")
-
-    if timeframe == 'daily':
-        fig.add_trace(go.Scatter(
-            x=backward_results['date'].tolist() + backward_results['date'].tolist()[::-1],
-            y=(backward_results['forecast'] * 1.2).tolist() + (backward_results['forecast'] * 0.8).tolist()[::-1],
-            fill='toself',
-            fillcolor='rgba(255, 127, 14, 0.1)',
-            line=dict(width=0),
-            showlegend=True,
-            name='±20% Forecast Range',
-            hoverinfo='skip'
-        ))
-    
-    fig.update_layout(
-        title=f'Actual vs {horizon}-Day Forecast {title_suffix} for {len(selected_categories) or "All"} Categories',
-        xaxis_title=x_label,
-        yaxis_title=f'Total {timeframe.capitalize()} Amount',
-        hovermode='x unified',
-        height=500,
-        legend=dict(
-            orientation='h',
-            yanchor='bottom',
-            y=1.02,
-            xanchor='right',
-            x=1
-        ),
-        xaxis=dict(
-            tickformat='%b %d, %Y',
-            rangeslider_visible=True if timeframe == 'weekly' else False,
-            rangeselector=dict(
-                buttons=list([
-                    dict(count=1, label="1m", step="month", stepmode="backward"),
-                    dict(count=3, label="3m", step="month", stepmode="backward"),
-                    dict(count=6, label="6m", step="month", stepmode="backward"),
-                    dict(step="all")
-                ])
-            ) if timeframe == 'weekly' else {}
-        )
-    )
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Plot error over time with more details
-    fig_error = go.Figure()
-    
-    # Add error line
-    fig_error.add_trace(go.Scatter(
-        x=backward_results['date'],
-        y=backward_results['pct_error'],
-        name='Error %',
-        line=dict(color='#d62728', width=2),
-        mode='lines+markers',
-        marker=dict(size=6 if timeframe == 'daily' else 8),
-        customdata=backward_results[['forecast', 'actual', 'date']],
-        hovertemplate=(
-            f'<b>{"Week Starting" if timeframe == "weekly" else "Date"}:</b> %{{customdata[2]|%Y-%m-%d}}<br>' +
-            '<b>Error</b>: %{y:.1f}%<br>' +
-            '<b>Forecast</b>: $%{customdata[0]:,.2f}<br>' +
-            '<b>Actual</b>: $%{customdata[1]:,.2f}<br>' +
-            '<extra></extra>'
-        )
-    ))
-    
-    # Add zero line
-    fig_error.add_hline(
-        y=0, line_dash="dash",
-        annotation_text="Perfect Forecast",
-        annotation_position="bottom right",
-        line_width=1
-    )
-    
-    # Add ±10% bands
-    fig_error.add_hrect(
-        y0=-10, y1=10,
-        fillcolor="green", opacity=0.1,
-        layer="below", line_width=0,
-        annotation_text="±10% Error Band",
-        annotation_position="top left"
-    )
-    
-    fig_error.update_layout(
-        title=f'Forecast Error Over Time ({horizon}-Day Horizon) {title_suffix}',
-        xaxis_title=x_label,
-        yaxis_title=f'Error % ({timeframe.capitalize()} Aggregated)',
-        hovermode='x',
-        height=400,
-        showlegend=True,
-        xaxis=dict(
-            tickformat='%b %d, %Y',
-            rangeslider_visible=True if timeframe == 'weekly' else False,
-            rangeselector=dict(
-                buttons=list([
-                    dict(count=1, label="1m", step="month", stepmode="backward"),
-                    dict(count=3, label="3m", step="month", stepmode="backward"),
-                    dict(count=6, label="6m", step="month", stepmode="backward"),
-                    dict(step="all")
-                ])
-            ) if timeframe == 'weekly' else {}
-        )
-    )
-    
-    # Add metrics as annotations
-    annotations = [
-        dict(
-            x=0.02,
-            y=0.95,
-            xref='paper',
-            yref='paper',
-            text=f"MAE: ${avg_mae:,.2f}<br>MAPE: {avg_mape:.1f}%",
-            showarrow=False,
-            bgcolor='white',
-            bordercolor='gray',
-            borderwidth=1,
-            borderpad=4
-        )
-    ]
-    
-    fig_error.update_layout(annotations=annotations)
-    st.plotly_chart(fig_error, use_container_width=True)
+    # Forecast charts using modular component
+    render_forecast_charts_section(backward_results, spike_threshold=controls['spike_threshold'])
     
     # --- 7-Day Moving Average Comparison ---
     st.header("7-Day Moving Average Comparison")
@@ -2007,16 +1403,6 @@ if not backward_results.empty:
         )
         
         st.plotly_chart(fig_ma, use_container_width=True)
-        
-        # Add explanation
-        st.markdown("""
-        **How to interpret this chart:**
-        - The chart shows 7-day moving averages of both actual and forecasted values
-        - This smooths out daily fluctuations to better show trends
-        - The forecast line shows what was predicted (on average) for each day, looking back from the forecast date
-        - The closer the two lines are, the better the forecast captures the underlying trend
-        - The MAE and MAPE values show the average error in the moving averages
-        """)
 
 # --- Export forecast to Excel ---
 if not forecast_df.empty:
