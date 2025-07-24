@@ -1,0 +1,6 @@
+v1.1.0 (2025-04-21)
+- Added Forecast Metrics Heatmap: Visualizes MAE by activity window and forecast horizon, with recommendations.
+- Metrics and method selection now update dynamically with user settings.
+- Removed lower/upper forecast intervals from dashboard and exports.
+- Added tooltips for all metrics in diagnostics table.
+- UI and code clarity improvements.
