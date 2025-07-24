@@ -14,7 +14,7 @@ from anomaly_utils import detect_outliers, detect_anomaly_transactions, recurrin
 from forecast_utils import aggregate_daily_to_weekly, calculate_weekly_metrics, add_week_metadata, aggregate_daily_to_monthly
 from config import config
 
-# Run from anywhere claude-monitor  # or cmonitor, ccmonitor for short
+
 
 def select_method(ts, methods, cat, window, fh):
     """
@@ -520,8 +520,7 @@ for cat in df['category'].unique():
         'periodic_spike': lambda ts, fh: periodic_spike_method(ts, fh, category=cat)
     }
     # --- Backtest and select best method ---
-    ts_diag = ts.loc[pd.to_datetime(diag_start):pd.to_datetime(diag_end)]
-    avg_errors = rolling_backtest(ts_diag, methods, activity_window, forecast_horizon)
+    avg_errors = rolling_backtest(ts, methods, activity_window, forecast_horizon)
     # Determine best method based on selection mode
     if method_selection_mode == "Automatic":
         best_method = select_method(ts, methods, cat, activity_window, forecast_horizon)
