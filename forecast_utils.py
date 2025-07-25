@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+from config import config
 
 def aggregate_daily_to_weekly(daily_results):
     """
@@ -146,3 +147,106 @@ def aggregate_daily_to_monthly(daily_results):
     # Ensure the date column is named 'date' and is a timestamp (first day of month)
     monthly['date'] = monthly['date'].dt.to_period('M').dt.start_time
     return monthly
+
+
+def add_rolling_features(ts, windows=[7, 14, 30]):
+    """
+    Add rolling average features to time series for improved forecasting.
+    
+    Args:
+        ts: Time series (pandas Series with datetime index)
+        windows: List of rolling window sizes in days
+        
+    Returns:
+        DataFrame with original values and rolling features
+    """
+    if not isinstance(ts, pd.Series):
+        ts = pd.Series(ts)
+    
+    if len(ts) < max(windows):
+        # Not enough data for rolling features
+        return pd.DataFrame({'value': ts})
+    
+    df = pd.DataFrame({'value': ts})
+    
+    # Add rolling averages
+    for window in windows:
+        if len(ts) >= window:
+            df[f'rolling_mean_{window}d'] = ts.rolling(window=window, min_periods=1).mean()
+            df[f'rolling_std_{window}d'] = ts.rolling(window=window, min_periods=1).std()
+    
+    # Add trend indicators
+    if len(ts) >= 7:
+        df['trend_7d'] = ts.rolling(7).mean().diff()
+    if len(ts) >= 14:
+        df['trend_14d'] = ts.rolling(14).mean().diff()
+    
+    # Add volatility measures
+    if len(ts) >= 7:
+        df['volatility_7d'] = ts.rolling(7).std() / ts.rolling(7).mean()
+    
+    return df
+
+
+def cap_outliers(ts, method='percentile', cap_percentile=None, floor_percentile=None):
+    """
+    Cap outliers instead of removing them to preserve data integrity.
+    
+    Args:
+        ts: Time series (pandas Series)
+        method: 'percentile' or 'iqr'
+        cap_percentile: Upper percentile for capping (default from config)
+        floor_percentile: Lower percentile for flooring (default from config)
+        
+    Returns:
+        Time series with capped outliers
+    """
+    if not isinstance(ts, pd.Series):
+        ts = pd.Series(ts)
+    
+    if len(ts) < 10:  # Not enough data for meaningful capping
+        return ts
+    
+    ts_capped = ts.copy()
+    
+    if method == 'percentile':
+        cap_pct = cap_percentile or config.OUTLIER_CAP_PERCENTILE
+        floor_pct = floor_percentile or config.OUTLIER_FLOOR_PERCENTILE
+        
+        upper_cap = np.percentile(ts.dropna(), cap_pct)
+        lower_cap = np.percentile(ts.dropna(), floor_pct)
+        
+        ts_capped = ts_capped.clip(lower=lower_cap, upper=upper_cap)
+        
+    elif method == 'iqr':
+        Q1 = ts.quantile(0.25)
+        Q3 = ts.quantile(0.75)
+        IQR = Q3 - Q1
+        
+        lower_cap = Q1 - config.IQR_MULTIPLIER * IQR
+        upper_cap = Q3 + config.IQR_MULTIPLIER * IQR
+        
+        ts_capped = ts_capped.clip(lower=lower_cap, upper=upper_cap)
+    
+    return ts_capped
+
+
+def enhance_time_series(ts, add_features=True, cap_outliers_flag=True):
+    """
+    Enhance time series with rolling features and outlier capping.
+    
+    Args:
+        ts: Time series (pandas Series)
+        add_features: Whether to add rolling features
+        cap_outliers_flag: Whether to cap outliers
+        
+    Returns:
+        Enhanced time series or DataFrame with features
+    """
+    if cap_outliers_flag and config.OUTLIER_CAPPING_ENABLED:
+        ts = cap_outliers(ts)
+    
+    if add_features:
+        return add_rolling_features(ts)
+    else:
+        return ts

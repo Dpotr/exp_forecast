@@ -12,7 +12,7 @@ import subprocess
 from croston import croston
 from anomaly_utils import detect_outliers, detect_anomaly_transactions, recurring_payments, get_comprehensive_anomalies, create_anomaly_visualization, create_anomaly_summary_table
 from forecast_metrics import ForecastMetrics, calculate_forecast_metrics
-from forecast_utils import aggregate_daily_to_weekly, calculate_weekly_metrics, add_week_metadata, aggregate_daily_to_monthly
+from forecast_utils import aggregate_daily_to_weekly, calculate_weekly_metrics, add_week_metadata, aggregate_daily_to_monthly, enhance_time_series
 from config import config
 
 # Import modular UI components
@@ -253,6 +253,11 @@ for cat in df['category'].unique():
     recent_nonzero = (df_cat[df_cat['date'] >= last_window_start]['amount'] > 0).sum()
     forecast_active = recent_nonzero > 0
     ts = df_cat.groupby('date')['amount'].sum().reindex(pd.date_range(df_cat['date'].min(), df['date'].max()), fill_value=0)
+    
+    # Apply Phase 1 improvements: outlier capping for all methods
+    if config.OUTLIER_CAPPING_ENABLED:
+        ts = enhance_time_series(ts, add_features=False, cap_outliers_flag=True)
+    
     # --- Define forecasting methods ---
     def mean_method(ts, fh):
         # Enhanced forecast with better weekly seasonality and smoothing
@@ -385,6 +390,45 @@ for cat in df['category'].unique():
         elif 0 <= offset < fh:
             forecast[offset] = spike_value
         return forecast
+    
+    def weighted_ensemble_method(ts, fh):
+        """Simple robust ensemble: combines mean and median with adaptive weighting."""
+        try:
+            # Get forecasts from reliable methods
+            mean_forecast = mean_method(ts, fh)
+            median_forecast = median_method(ts, fh)
+            
+            # Simple adaptive weighting based on recent volatility
+            if len(ts) >= 14:
+                recent_volatility = ts[-14:].std()
+                recent_mean = ts[-14:].mean()
+                
+                # High volatility -> favor median (more robust)
+                # Low volatility -> favor mean (more responsive)
+                if recent_mean > 0:
+                    cv = recent_volatility / recent_mean  # Coefficient of variation
+                    median_weight = min(0.8, cv * 2)  # Cap at 80%
+                    mean_weight = 1 - median_weight
+                else:
+                    median_weight = 0.6
+                    mean_weight = 0.4
+            else:
+                # Default weights for limited data
+                median_weight = 0.6
+                mean_weight = 0.4
+            
+            # Create ensemble forecast
+            ensemble_forecast = (mean_weight * np.array(mean_forecast) + 
+                               median_weight * np.array(median_forecast))
+            
+            # Ensure non-negative
+            ensemble_forecast = np.maximum(ensemble_forecast, 0)
+            
+            return ensemble_forecast
+            
+        except Exception as e:
+            # Fallback to median method if ensemble fails
+            return median_method(ts, fh)
 
     methods = {
         'mean': mean_method,
@@ -392,7 +436,8 @@ for cat in df['category'].unique():
         'zero': zero_method,
         'croston': croston_method,
         'prophet': prophet_method,
-        'periodic_spike': lambda ts, fh: periodic_spike_method(ts, fh, category=cat)
+        'periodic_spike': lambda ts, fh: periodic_spike_method(ts, fh, category=cat),
+        'weighted_ensemble': weighted_ensemble_method
     }
     # --- Backtest and select best method ---
     avg_errors = rolling_backtest(ts, methods, activity_window, forecast_horizon)

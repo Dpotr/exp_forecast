@@ -44,8 +44,14 @@ class Config:
         self.MIN_BASELINE_DAYS = 14
         self.ANOMALY_CONFIDENCE_LEVEL = 0.95
         
+        # Outlier capping settings (Phase 1 improvement)
+        self.OUTLIER_CAPPING_ENABLED = True
+        self.OUTLIER_CAP_PERCENTILE = 95  # Cap at 95th percentile instead of removal
+        self.OUTLIER_FLOOR_PERCENTILE = 5  # Floor at 5th percentile
+        self.ROLLING_OUTLIER_WINDOW = 30  # Rolling window for adaptive capping
+        
         # Forecast method names
-        self.FORECAST_METHODS = ["mean", "median", "zero", "croston", "prophet", "periodic_spike"]
+        self.FORECAST_METHODS = ["mean", "median", "zero", "croston", "prophet", "periodic_spike", "weighted_ensemble"]
         
         # Spike categories and thresholds
         self.SPIKE_CATEGORIES = {
