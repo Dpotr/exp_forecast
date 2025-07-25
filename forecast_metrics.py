@@ -93,6 +93,7 @@ class ForecastMetrics:
             'max_error': np.max(abs_errors),  # Maximum absolute error
             'min_error': np.min(abs_errors),  # Minimum absolute error
             'std_error': np.std(errors),  # Standard deviation of errors
+            'tae': np.sum(abs_errors),  # Time Absolute Error (total absolute error)
         }
     
     def _calculate_percentage_metrics(self, actual: np.ndarray, forecast: np.ndarray) -> Dict[str, float]:

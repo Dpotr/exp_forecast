@@ -26,6 +26,7 @@ from anomaly_utils import (
     recurring_payments
 )
 from forecast_metrics import calculate_forecast_metrics
+from forecast_utils import calculate_weekly_metrics
 
 
 def render_data_overview_section(df: pd.DataFrame) -> None:
@@ -344,7 +345,7 @@ def render_forecast_performance_section(df: pd.DataFrame,
             create_metric_card("CV-RMSE", f"{cv_rmse_val:.3f}" if not np.isinf(cv_rmse_val) else "N/A")
     
     with tabs[2]:  # Quality Assessment
-        st.write("**Overall Quality Assessment**")
+        st.write("**Overall Quality Assessment with Subjective Analysis**")
         assessment = comprehensive_metrics['overall_assessment']
         
         # Quality rating with color coding
@@ -371,6 +372,200 @@ def render_forecast_performance_section(df: pd.DataFrame,
             st.write("**Recommendations:**")
             for i, rec in enumerate(assessment['recommendations'], 1):
                 st.write(f"{i}. {rec}")
+        
+        # Comprehensive metrics table with subjective explanations
+        st.subheader("📋 Общее резюме (General Summary)")
+        
+        # Get TAE (Time Absolute Error) from metrics
+        if 'basic_metrics' in comprehensive_metrics and 'tae' in comprehensive_metrics['basic_metrics']:
+            tae = comprehensive_metrics['basic_metrics']['tae']
+        else:
+            tae = 0
+            
+        # Create comprehensive metrics table with Russian subjective explanations
+        def get_subjective_comment(metric_name, value):
+            """Get subjective commentary in Russian for each metric"""
+            comments = {
+                'Direction Correct': {
+                    'high': "Хорошо",
+                    'medium': "Слабовато, можно улучшить", 
+                    'low': "Очень низко"
+                },
+                'Hit Rate ±10%': {
+                    'high': "Надёжный показатель",
+                    'medium': "Плохо",
+                    'low': "Очень низко"
+                },
+                'Hit Rate ±20%': {
+                    'high': "Надёжный показатель", 
+                    'medium': "Плохо",
+                    'low': "Плохо"
+                },
+                'Over / Under Bias': {
+                    'underforecast': "Не критично, но требует внимания",
+                    'overforecast': "Не критично, но требует внимания",
+                    'balanced': "Хорошо"
+                },
+                'Theil\'s U': {
+                    'excellent': "Хорошо",
+                    'good': "Хорошо", 
+                    'fair': "Средне",
+                    'poor': "Плохо"
+                },
+                'MASE': {
+                    'excellent': "Надёжный показатель",
+                    'good': "Надёжный показатель",
+                    'fair': "Средне", 
+                    'poor': "Ошибка довольно большая"
+                },
+                'CV-RMSE': {
+                    'low': "Хорошо",
+                    'medium': "Средне",
+                    'high': "Ошибка довольно большая"
+                },
+                'TAE': {
+                    'low': "Отлично",
+                    'medium': "Хорошо",
+                    'high': "Требует улучшения"
+                }
+            }
+            
+            if metric_name == 'Direction Correct':
+                if value >= 60:
+                    return comments[metric_name]['high']
+                elif value >= 40:
+                    return comments[metric_name]['medium']
+                else:
+                    return comments[metric_name]['low']
+            elif metric_name in ['Hit Rate ±10%', 'Hit Rate ±20%']:
+                if value >= 70:
+                    return comments[metric_name]['high']
+                elif value >= 50:
+                    return comments[metric_name]['medium'] 
+                else:
+                    return comments[metric_name]['low']
+            elif metric_name == 'Over / Under Bias':
+                if 'underforecast' in str(value).lower():
+                    return comments[metric_name]['underforecast']
+                elif 'overforecast' in str(value).lower():
+                    return comments[metric_name]['overforecast']
+                else:
+                    return comments[metric_name]['balanced']
+            elif metric_name == 'Theil\'s U':
+                if value <= 0.8:
+                    return comments[metric_name]['excellent']
+                elif value <= 1.0:
+                    return comments[metric_name]['good']
+                elif value <= 1.5:
+                    return comments[metric_name]['fair']
+                else:
+                    return comments[metric_name]['poor']
+            elif metric_name == 'MASE':
+                if value <= 0.8:
+                    return comments[metric_name]['excellent']
+                elif value <= 1.0:
+                    return comments[metric_name]['good']
+                elif value <= 1.5:
+                    return comments[metric_name]['fair']
+                else:
+                    return comments[metric_name]['poor']
+            elif metric_name == 'CV-RMSE':
+                if value <= 0.3:
+                    return comments[metric_name]['low']
+                elif value <= 0.7:
+                    return comments[metric_name]['medium']
+                else:
+                    return comments[metric_name]['high']
+            elif metric_name == 'TAE':
+                if value <= 50:
+                    return comments[metric_name]['low']
+                elif value <= 100:
+                    return comments[metric_name]['medium']
+                else:
+                    return comments[metric_name]['high']
+            
+            return "Нормально"
+        
+        # Build summary table
+        summary_metrics = []
+        
+        # Direction Correct
+        direction_pct = comprehensive_metrics['directional_metrics']['directional_accuracy']
+        summary_metrics.append({
+            'Метрика': 'Direction Correct',
+            'Оценка': f"🟡 {direction_pct:.1f}%",
+            'Комментарий': get_subjective_comment('Direction Correct', direction_pct)
+        })
+        
+        # Hit Rates
+        hit_10 = comprehensive_metrics['directional_metrics']['hit_rate_10pct']
+        summary_metrics.append({
+            'Метрика': 'Hit Rate ±10%', 
+            'Оценка': f"🔴 {hit_10:.1f}%",
+            'Комментарий': get_subjective_comment('Hit Rate ±10%', hit_10)
+        })
+        
+        hit_20 = comprehensive_metrics['directional_metrics']['hit_rate_20pct']
+        summary_metrics.append({
+            'Метрика': 'Hit Rate ±20%',
+            'Оценка': f"🔴 {hit_20:.1f}%", 
+            'Комментарий': get_subjective_comment('Hit Rate ±20%', hit_20)
+        })
+        
+        # Over/Under Bias
+        over_pct = comprehensive_metrics['distribution_metrics']['overforecast_percentage']
+        under_pct = comprehensive_metrics['distribution_metrics']['underforecast_percentage']
+        if over_pct > under_pct:
+            bias_text = "Смещение в overforecast"
+        else:
+            bias_text = "Смещение в underforecast" 
+        summary_metrics.append({
+            'Метрика': 'Over / Under Bias',
+            'Оценка': f"🟡 {bias_text}",
+            'Комментарий': get_subjective_comment('Over / Under Bias', bias_text)
+        })
+        
+        # Theil's U
+        theil_u = comprehensive_metrics['distribution_metrics']['theil_u']
+        theil_display = f"{theil_u:.3f}" if not np.isinf(theil_u) else "N/A"
+        color_icon = "🟢" if theil_u <= 0.8 else "🟡" if theil_u <= 1.0 else "🔴"
+        summary_metrics.append({
+            'Метрика': "Theil's U",
+            'Оценка': f"{color_icon} {theil_display}",
+            'Комментарий': get_subjective_comment("Theil's U", theil_u)
+        })
+        
+        # MASE
+        mase = comprehensive_metrics['scaled_metrics']['mase']
+        mase_display = f"{mase:.3f}" if not np.isinf(mase) else "N/A"
+        mase_icon = "🟢" if mase <= 0.8 else "🟡" if mase <= 1.0 else "🔴"
+        summary_metrics.append({
+            'Метрика': 'MASE',
+            'Оценка': f"{mase_icon} {mase_display}",
+            'Комментарий': get_subjective_comment('MASE', mase)
+        })
+        
+        # CV-RMSE  
+        cv_rmse = comprehensive_metrics['scaled_metrics']['cv_rmse']
+        cv_rmse_display = f"{cv_rmse:.3f}" if not np.isinf(cv_rmse) else "N/A"
+        cv_icon = "🟢" if cv_rmse <= 0.3 else "🟡" if cv_rmse <= 0.7 else "🔴"
+        summary_metrics.append({
+            'Метрика': 'CV-RMSE',
+            'Оценка': f"{cv_icon} {cv_rmse_display}",
+            'Комментарий': get_subjective_comment('CV-RMSE', cv_rmse)
+        })
+        
+        # TAE (Time Absolute Error)
+        tae_icon = "🟢" if tae <= 50 else "🟡" if tae <= 100 else "🔴"
+        summary_metrics.append({
+            'Метрика': 'TAE',
+            'Оценка': f"{tae_icon} {tae:.2f}",
+            'Комментарий': get_subjective_comment('TAE', tae)
+        })
+        
+        # Display the summary table
+        summary_df = pd.DataFrame(summary_metrics)
+        display_dataframe_with_controls(summary_df, show_download=True, download_key="comprehensive_summary")
     
     with tabs[3]:  # Time Analysis
         if 'time_metrics' in comprehensive_metrics:
@@ -860,3 +1055,678 @@ def render_forecast_charts_section(backward_results: pd.DataFrame,
         error_type="percentage"
     )
     st.plotly_chart(error_fig, use_container_width=True)
+
+
+def calculate_backward_accuracy(df, forecast_horizon=7, min_data_points=30, timeframe='daily', activity_window=60):
+    """
+    Calculate forecast accuracy by looking back at past forecasts and comparing with actuals.
+    
+    Args:
+        df: DataFrame with transaction data with columns: date, amount, category
+        forecast_horizon: Number of days ahead to forecast
+        activity_window: Number of recent days used as training window for generating each historical forecast
+        min_data_points: Minimum number of data points required for daily analysis
+        timeframe: 'daily' or 'weekly' - whether to return daily or weekly aggregated results
+        
+    Returns:
+        DataFrame with date, actual, forecast, and error metrics.
+    """
+    from croston import croston
+    from prophet import Prophet
+    from sklearn.metrics import mean_absolute_error
+    
+    try:
+        # Validate inputs
+        if timeframe not in ['daily', 'weekly', 'monthly']:
+            raise ValueError("timeframe must be either 'daily' or 'weekly' or 'monthly'")
+            
+        if df.empty:
+            return pd.DataFrame()
+            
+        # Ensure we have a copy of the dataframe
+        df = df.copy()
+        
+        # Convert dates to datetime if they're not already
+        if not pd.api.types.is_datetime64_any_dtype(df['date']):
+            df['date'] = pd.to_datetime(df['date'])
+        
+        # Get unique dates with actual data
+        actual_dates = df['date'].sort_values().unique()
+        
+        # Adjust minimum data requirements based on timeframe
+        min_days_required = forecast_horizon + 1  # At least one full forecast cycle
+        if timeframe == 'weekly':
+            # For weekly, we can be more lenient - need at least 2 weeks of data
+            min_days_required = max(forecast_horizon + 1, 14)  # At least 2 weeks
+            # Adjust min_data_points to be at least min_days_required
+            min_data_points = min(min_data_points, min_days_required)
+        
+        if len(actual_dates) < min_days_required:
+            st.warning(f"Not enough data points for {timeframe} analysis. Need at least {min_days_required} days of data. Have {len(actual_dates)} days.")
+            return pd.DataFrame()
+            
+        # For weekly view, we can proceed with fewer data points than the default min_data_points
+        if timeframe == 'weekly' and len(actual_dates) < min_data_points + forecast_horizon:
+            st.warning(f"Limited data available for weekly analysis. Using all available {len(actual_dates)} days.")
+        
+        results = []
+        
+        # Define forecasting methods
+        def mean_forecast(ts, fh):
+            return ts.mean() if len(ts) > 0 else 0
+        
+        def median_forecast(ts, fh):
+            return ts.median() if len(ts) > 0 else 0
+        
+        def zero_forecast(ts, fh):
+            return 0
+        
+        def periodic_spike_forecast(ts, fh):
+            if len(ts) < 3:
+                return ts.mean() if len(ts) > 0 else 0
+            # Calculate average of non-zero values
+            nonzero = ts[ts > 0]
+            if len(nonzero) == 0:
+                return 0
+            return nonzero.mean()
+        
+        def croston_forecast(ts, fh):
+            try:
+                if len(ts) < 2:
+                    return ts.mean() if len(ts) > 0 else 0
+                result = croston(ts.values, h=fh, alpha=0.1, beta=0.1)
+                return result['forecast'][0] if len(result['forecast']) > 0 else 0
+            except:
+                return ts.mean() if len(ts) > 0 else 0
+        
+        def prophet_forecast(ts, fh):
+            try:
+                if len(ts) < 10:
+                    return ts.mean() if len(ts) > 0 else 0
+                
+                # Prepare data for Prophet
+                prophet_df = pd.DataFrame({
+                    'ds': ts.index,
+                    'y': ts.values
+                })
+                
+                # Create and fit model
+                model = Prophet(daily_seasonality=False, yearly_seasonality=False, weekly_seasonality=True)
+                model.fit(prophet_df)
+                
+                # Make forecast
+                future = model.make_future_dataframe(periods=fh)
+                forecast = model.predict(future)
+                
+                # Return the forecast for the horizon period
+                return max(0, forecast['yhat'].iloc[-1])
+            except:
+                return ts.mean() if len(ts) > 0 else 0
+        
+        methods = {
+            'mean': mean_forecast,
+            'median': median_forecast,
+            'zero': zero_forecast,
+            'croston': croston_forecast,
+            'prophet': prophet_forecast,
+            'periodic_spike': periodic_spike_forecast
+        }
+        
+        # Generate forecasts for each date
+        for i in range(activity_window + forecast_horizon, len(actual_dates)):
+            current_date = actual_dates[i]
+            
+            # Get actual values for current date (sum across all categories)
+            actual_data = df[df['date'] == current_date]
+            if len(actual_data) == 0:
+                continue
+                
+            actual = actual_data['amount'].sum()
+            
+            # Initialize total_forecast at the start of each date's processing
+            total_forecast = 0
+            forecast_by_category = {}
+            
+            # Get unique categories in the data
+            all_categories = df['category'].unique()
+            
+            # Generate forecast for each category independently
+            for cat in all_categories:
+                # Get training data for this category up to current date
+                training_end_date = current_date - pd.Timedelta(days=forecast_horizon)
+                cat_data = df[(df['category'] == cat) & (df['date'] <= training_end_date)].copy()
+                
+                if len(cat_data) < 1:
+                    continue
+                    
+                # Create time series with proper datetime index
+                ts = cat_data.groupby('date')['amount'].sum().reindex(
+                    pd.date_range(start=training_end_date - pd.Timedelta(days=activity_window-1), 
+                                end=training_end_date, freq='D'), fill_value=0
+                )
+                
+                # Select best method for this category
+                nonzero_days = (ts > 0).sum()
+                spike_cats = ['school', 'rent + communal', 'car rent']
+                if any(key in cat.lower() for key in spike_cats) or nonzero_days <= 2:
+                    method_name = 'periodic_spike'
+                else:
+                    # Simple method selection - use mean for most cases
+                    method_name = 'mean'
+                
+                # Generate forecast
+                forecast = methods[method_name](ts, forecast_horizon)
+                forecast_by_category[cat] = forecast
+                total_forecast += forecast
+            
+            # Store results
+            error = actual - total_forecast
+            abs_error = abs(error)
+            pct_error = (error / actual * 100) if actual != 0 else 0
+            within_10pct = abs(pct_error) <= 10
+            within_20pct = abs(pct_error) <= 20
+            
+            results.append({
+                'date': current_date,
+                'actual': actual,
+                'forecast': total_forecast,
+                'error': error,
+                'abs_error': abs_error,
+                'pct_error': pct_error,
+                'within_10pct': within_10pct,
+                'within_20pct': within_20pct
+            })
+        
+        results_df = pd.DataFrame(results)
+        
+        if results_df.empty:
+            return pd.DataFrame()
+        
+        # Convert to requested timeframe
+        if timeframe == 'weekly':
+            # Group by week and aggregate
+            results_df['week'] = results_df['date'].dt.to_period('W')
+            weekly_results = results_df.groupby('week').agg({
+                'actual': 'sum',
+                'forecast': 'sum',
+                'error': 'sum',
+                'abs_error': 'sum'
+            }).reset_index()
+            
+            # Recalculate percentage metrics for weekly data
+            weekly_results['pct_error'] = (weekly_results['error'] / weekly_results['actual'] * 100).fillna(0)
+            weekly_results['within_10pct'] = weekly_results['pct_error'].abs() <= 10
+            weekly_results['within_20pct'] = weekly_results['pct_error'].abs() <= 20
+            weekly_results['date'] = weekly_results['week'].dt.end_time
+            
+            return weekly_results.drop('week', axis=1)
+        
+        return results_df
+        
+    except Exception as e:
+        st.error(f"Error in backward forecast calculation: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
+        return pd.DataFrame()
+
+
+def render_backward_forecast_section(df: pd.DataFrame, 
+                                   controls: Dict[str, Any]) -> None:
+    """
+    Render the comprehensive backward forecast performance analysis section.
+    
+    Args:
+        df: Main expense DataFrame
+        controls: Dictionary with control values from sidebar
+    """
+    create_section_header(
+        "📈 Backward Forecast Performance", 
+        "Analyze forecast accuracy over time by comparing past forecasts with actuals"
+    )
+    
+    if df.empty:
+        create_info_box("No Data", "No data available for backward forecast analysis.", "info")
+        return
+    
+    # Extract activity window from controls
+    activity_window = controls.get('activity_window', 70)
+    
+    # Create columns for the controls
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        max_horizon = min(30, len(df['date'].unique()) - 15)  # Ensure enough data
+        horizon = st.slider("Forecast Horizon (days)", 1, max(1, max_horizon), 7, 1,
+                           help="Number of days ahead to evaluate forecast accuracy")
+    
+    # Add timeframe selector (daily/weekly)
+    # View is fixed to Daily to simplify Backward Forecast Performance
+    timeframe = 'daily'  # only daily view supported
+    
+    # Add date range selection
+    min_date = df['date'].min().date()
+    max_date = df['date'].max().date()
+    default_end = max_date
+    default_start = max(min_date, (pd.to_datetime(default_end) - pd.DateOffset(months=3)).date())
+    
+    with st.expander("Date Range Settings", expanded=True):
+        date_col1, date_col2 = st.columns(2)
+        with date_col1:
+            start_date = st.date_input(
+                "Start Date",
+                value=default_start,
+                min_value=min_date,
+                max_value=max_date,
+                help="Start date for the analysis period"
+            )
+        with date_col2:
+            end_date = st.date_input(
+                "End Date",
+                value=default_end,
+                min_value=min_date,
+                max_value=max_date,
+                help="End date for the analysis period"
+            )
+    
+        # Ensure start date is before end date
+        if start_date > end_date:
+            st.error("Error: Start date must be before end date")
+            st.stop()
+    
+    # Add category selection
+    all_categories = sorted(df['category'].unique())
+    selected_categories = st.multiselect(
+        'Select Categories (Leave empty for all)',
+        options=all_categories,
+        default=[],
+        help="Select specific categories to analyze or leave empty to include all categories"
+    )
+    
+    # Extend data window by forecast horizon
+    window_start_date = (pd.to_datetime(start_date) - pd.Timedelta(days=horizon)).date()
+    analysis_df = df[
+        (df['date'].dt.date >= window_start_date) &
+        (df['date'].dt.date <= end_date)
+    ].copy()
+    
+    if selected_categories:
+        analysis_df = analysis_df[analysis_df['category'].isin(selected_categories)]
+        st.info(f"Showing results for categories: {', '.join(selected_categories)} from {start_date} to {end_date}")
+    else:
+        st.info(f"Showing results for all categories from {start_date} to {end_date}")
+    
+    # Calculate backward forecast performance
+    with st.spinner(f"Calculating {timeframe} forecast accuracy..."):
+        backward_results = calculate_backward_accuracy(
+            analysis_df,
+            forecast_horizon=horizon,
+            activity_window=activity_window,
+            timeframe=timeframe
+        )
+        # Keep only rows that fall inside the user-selected report window
+        if not backward_results.empty and 'date' in backward_results.columns:
+            backward_results = backward_results[
+                (backward_results['date'] >= pd.to_datetime(start_date)) &
+                (backward_results['date'] <= pd.to_datetime(end_date))
+            ]
+        else:
+            # If DataFrame is empty or missing 'date', set to empty DataFrame with expected columns
+            backward_results = pd.DataFrame(columns=[
+                'date', 'actual', 'forecast', 'error', 'abs_error', 'pct_error', 'within_10pct', 'within_20pct'])
+    
+    if not backward_results.empty:
+        # Calculate summary metrics based on the selected timeframe
+        # --- Calculate Total Actual from original df, not from backward_results ---
+        actual_period_df = df[(df['date'] >= pd.to_datetime(start_date)) & (df['date'] <= pd.to_datetime(end_date))]
+        if selected_categories:
+            actual_period_df = actual_period_df[actual_period_df['category'].isin(selected_categories)]
+        if timeframe == 'monthly':
+            # Group by month and sum
+            actual_period_df['year_month'] = actual_period_df['date'].dt.to_period('M')
+            total_actual = actual_period_df.groupby('year_month')['amount'].sum().sum()
+        elif timeframe == 'weekly':
+            # Group by week and sum
+            actual_period_df['year_week'] = actual_period_df['date'].dt.strftime('%Y-W%U')
+            total_actual = actual_period_df.groupby('year_week')['amount'].sum().sum()
+        else:
+            total_actual = actual_period_df['amount'].sum()
+
+        if timeframe == 'daily':
+            # For daily view, calculate metrics from daily values
+            total_forecast = backward_results['forecast'].sum()
+            total_error = total_forecast - total_actual
+            total_abs_error = abs(total_error)
+            # Weighted Absolute Percentage Error (WAPE)
+            wape = (backward_results['abs_error'].sum() / total_actual * 100) if total_actual > 0 else 0
+            # Mean Absolute Percentage Error (daily average of |pct_error|)
+            avg_mape = backward_results['pct_error'].abs().mean()
+            # Calculate accuracy metrics
+            accuracy_10pct = backward_results['within_10pct'].mean() * 100 if 'within_10pct' in backward_results.columns else 0
+            accuracy_20pct = backward_results['within_20pct'].mean() * 100 if 'within_20pct' in backward_results.columns else 0
+            # Calculate average daily metrics
+            avg_mae = backward_results['abs_error'].mean()  # daily average MAE
+        else:  # weekly or monthly
+            metrics = calculate_weekly_metrics(backward_results)
+            total_forecast = metrics['total_forecast']
+            total_error = total_forecast - total_actual
+            total_abs_error = abs(total_error)
+            avg_mape = metrics['avg_mape']
+            wape = metrics.get('wape', 0)
+            accuracy_10pct = metrics['accuracy_10pct']
+            accuracy_20pct = metrics['accuracy_20pct']
+            avg_mae = metrics['avg_weekly_actual'] if timeframe == 'weekly' else metrics['avg_weekly_forecast']
+        
+        # Show category information if filtered
+        if selected_categories:
+            st.subheader(f'Analysis for {len(selected_categories)} Selected Categories')
+        
+        # Display summary metrics
+        col1, col2, col3, col4, col5 = st.columns(5)
+        with col1:
+            st.metric("Total Actual", f"${total_actual:,.2f}")
+        with col2:
+            st.metric("Total Forecast", f"${total_forecast:,.2f}", delta=f"{total_error:+,.2f}")
+        with col3:
+            st.metric("Mean Absolute Error (MAE)", f"${avg_mae:,.2f}")
+        with col4:
+            st.metric("Mean Absolute % Error (MAPE)", f"{avg_mape:.1f}%")
+        with col5:
+            st.metric("Weighted APE (WAPE)", f"{wape:.1f}%")
+        
+        # Display accuracy metrics in a separate row
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Accuracy (±10%)", f"{accuracy_10pct:.1f}%")
+        with col2:
+            st.metric("Accuracy (±20%)", f"{accuracy_20pct:.1f}%")
+        
+        # Comprehensive forecast performance metrics using modular component
+        render_forecast_performance_section(df, backward_results, controls)
+        
+        # Forecast charts using modular component
+        render_forecast_charts_section(backward_results, spike_threshold=controls['spike_threshold'])
+        
+        # --- 7-Day Moving Average Comparison ---
+        st.header("7-Day Moving Average Comparison")
+        st.caption("Compare smoothed actual and forecasted values to identify trends")
+        
+        if not backward_results.empty and len(backward_results) >= 7:
+            # Calculate 7-day moving averages
+            ma_results = backward_results.copy()
+            ma_results['actual_ma7'] = ma_results['actual'].rolling(window=7, min_periods=1).mean()
+            ma_results['forecast_ma7'] = ma_results['forecast'].rolling(window=7, min_periods=1).mean()
+            
+            # Calculate MAE and MAPE for moving averages
+            ma_results['ma7_abs_error'] = (ma_results['actual_ma7'] - ma_results['forecast_ma7']).abs()
+            ma_results['ma7_pct_error'] = (ma_results['ma7_abs_error'] / ma_results['actual_ma7'] * 100).replace([np.inf, -np.inf], np.nan)
+            
+            # Calculate summary metrics
+            avg_ma7_mae = ma_results['ma7_abs_error'].mean()
+            avg_ma7_mape = ma_results['ma7_pct_error'].mean()
+            
+            # Create the plot
+            fig_ma = go.Figure()
+            
+            # Add actual MA7 line
+            fig_ma.add_trace(go.Scatter(
+                x=ma_results['date'],
+                y=ma_results['actual_ma7'],
+                name='Actual (7-day MA)',
+                line=dict(color='#1f77b4', width=3),
+                mode='lines+markers',
+                marker=dict(size=6),
+                hovertemplate='<b>Date</b>: %{x|%Y-%m-%d}<br>' +
+                            '<b>Actual MA7</b>: $%{y:,.2f}<extra></extra>'
+            ))
+            
+            # Add forecast MA7 line
+            fig_ma.add_trace(go.Scatter(
+                x=ma_results['date'],
+                y=ma_results['forecast_ma7'],
+                name=f'Forecast (7-day MA, {horizon}-day horizon)',
+                line=dict(color='#ff7f0e', width=3, dash='dash'),
+                mode='lines+markers',
+                marker=dict(size=6, symbol='diamond'),
+                hovertemplate='<b>Date</b>: %{x|%Y-%m-%d}<br>' +
+                            f'<b>Forecast MA7 ({horizon}-day horizon)</b>: $%{{y:,.2f}}<extra></extra>'
+            ))
+            
+            # Add error metrics as annotations
+            ma_annotations = [
+                dict(
+                    x=0.02,
+                    y=0.95,
+                    xref='paper',
+                    yref='paper',
+                    text=f"MAE (MA7): ${avg_ma7_mae:,.2f}<br>MAPE (MA7): {avg_ma7_mape:.1f}%",
+                    showarrow=False,
+                    bgcolor='white',
+                    bordercolor='gray',
+                    borderwidth=1,
+                    borderpad=4
+                )
+            ]
+            
+            fig_ma.update_layout(
+                title=f'7-Day Moving Average: Actual vs {horizon}-Day Forecast',
+                xaxis_title='Date',
+                yaxis_title='Amount (7-day MA)',
+                hovermode='x unified',
+                height=500,
+                legend=dict(
+                    orientation='h',
+                    yanchor='bottom',
+                    y=1.02,
+                    xanchor='right',
+                    x=1
+                ),
+                annotations=ma_annotations
+            )
+            
+            # Add range slider
+            fig_ma.update_xaxes(
+                rangeslider_visible=True,
+                rangeselector=dict(
+                    buttons=list([
+                        dict(count=7, label="1w", step="day", stepmode="backward"),
+                        dict(count=1, label="1m", step="month", stepmode="backward"),
+                        dict(count=3, label="3m", step="month", stepmode="backward"),
+                        dict(step="all")
+                    ])
+                )
+            )
+            
+            st.plotly_chart(fig_ma, use_container_width=True)
+    else:
+        create_info_box("No Results", "No backward forecast results available for the selected criteria.", "warning")
+
+
+def render_budget_tracking_section(df: pd.DataFrame) -> None:
+    """
+    Render the budget tracking section with monthly budget analysis.
+    
+    Args:
+        df: Main expense DataFrame
+    """
+    create_section_header(
+        "💰 Budget Tracking", 
+        "Track your monthly budget vs actual spending with daily breakdown"
+    )
+    
+    if df.empty:
+        create_info_box("No Data", "No data available for budget tracking.", "info")
+        return
+    
+    # Budget configuration
+    current_date = pd.Timestamp.now()
+    current_month = current_date.replace(day=1)
+    days_in_month = (current_month + pd.offsets.MonthEnd(1)).day
+    current_day = min(current_date.day, days_in_month)
+    
+    # Add budget input with default value
+    DEFAULT_BUDGET = 4000
+    with st.expander("Budget Settings"):
+        monthly_budget = st.number_input(
+            "Monthly Budget ($)",
+            min_value=0.0,
+            value=float(DEFAULT_BUDGET),
+            step=100.0,
+            format="%.2f",
+            help="Set your monthly budget amount"
+        )
+    
+    # Calculate daily budget
+    daily_budget = monthly_budget / days_in_month
+    
+    # Create date range for the current month (up to current date)
+    date_range = pd.date_range(
+        start=current_month, 
+        end=current_date,
+        freq='D'
+    )
+    
+    # Initialize budget dataframe with all required columns
+    budget_data = []
+    for i, date in enumerate(date_range, 1):
+        budget_data.append({
+            'date': date,
+            'day_of_month': i,
+            'cumulative_budget': round(i * daily_budget, 2),
+            'daily_amount': 0.0,
+            'cumulative_actual': 0.0,
+            'variance': 0.0
+        })
+    
+    budget_df = pd.DataFrame(budget_data)
+    
+    # Get current month data
+    current_month_mask = (
+        (df['date'].dt.year == current_date.year) & 
+        (df['date'].dt.month == current_date.month) &
+        (df['date'].dt.date <= current_date.date())
+    )
+    current_month_data = df[current_month_mask].copy()
+    
+    # Process daily totals if we have data
+    if not current_month_data.empty:
+        # Convert dates to match for comparison
+        current_month_data['date_only'] = current_month_data['date'].dt.date
+        
+        # Group by date and sum amounts
+        daily_totals = current_month_data.groupby('date_only')['amount'].sum().reset_index()
+        
+        # Update budget_df with actual amounts
+        for _, row in daily_totals.iterrows():
+            date = row['date_only']
+            amount = row['amount']
+            mask = budget_df['date'].dt.date == date
+            if mask.any():
+                budget_df.loc[mask, 'daily_amount'] = amount
+        
+        # Calculate running totals and variance
+        budget_df['cumulative_actual'] = budget_df['daily_amount'].cumsum()
+        budget_df['variance'] = budget_df['cumulative_actual'] - budget_df['cumulative_budget']
+        
+        # Current status
+        current_actual = budget_df['cumulative_actual'].iloc[-1] if not budget_df.empty else 0
+        current_budget = budget_df['cumulative_budget'].iloc[-1] if not budget_df.empty else 0
+        current_variance = current_actual - current_budget
+        current_day = budget_df['day_of_month'].iloc[-1] if not budget_df.empty else 0
+        
+        # Debug info
+        with st.expander("Debug Info - Budget Data"):
+            st.write(f"Current date: {current_date}")
+            st.write(f"Current month data range: {current_month} to {current_date}")
+            st.write(f"Found {len(current_month_data)} transactions in current month")
+            if not current_month_data.empty:
+                st.write("Sample transactions:", current_month_data[['date', 'category', 'amount']].head())
+            st.write("Budget DataFrame:", budget_df)
+        
+        # Create the plot
+        fig_budget = go.Figure()
+        
+        # Add budget line (full month)
+        fig_budget.add_trace(go.Scatter(
+            x=budget_df['date'].dt.day,
+            y=budget_df['cumulative_budget'],
+            name='Budget',
+            line=dict(color='#00cc96', width=3, dash='dash'),
+            hovertemplate='Day %{x}<br>Budget: $%{y:,.2f}<extra></extra>'
+        ))
+        
+        # Add actuals line (up to current day)
+        fig_budget.add_trace(go.Scatter(
+            x=budget_df[budget_df['date'] <= current_date]['date'].dt.day,
+            y=budget_df[budget_df['date'] <= current_date]['cumulative_actual'],
+            name='Actual',
+            line=dict(color='#636efa', width=3),
+            mode='lines+markers',
+            marker=dict(size=8),
+            hovertemplate='Day %{x}<br>Actual: $%{y:,.2f}<extra></extra>'
+        ))
+        
+        # Add today's line
+        fig_budget.add_vline(
+            x=current_day, 
+            line_dash="dash", 
+            line_color="red",
+            annotation_text=f"Today (Day {current_day})",
+            annotation_position="top right"
+        )
+        
+        # Add budget status annotation
+        status_color = "red" if current_variance > 0 else "green"
+        status_text = f"Over budget by ${abs(current_variance):,.2f}" if current_variance > 0 \
+            else f"Under budget by ${abs(current_variance):,.2f}"
+        
+        # Update layout
+        fig_budget.update_layout(
+            title=f"Monthly Budget: ${monthly_budget:,.0f} (${daily_budget:,.2f}/day)",
+            xaxis_title="Day of Month",
+            yaxis_title="Cumulative Amount ($)",
+            hovermode="x unified",
+            height=500,
+            showlegend=True,
+            annotations=[
+                dict(
+                    x=0.02,
+                    y=0.95,
+                    xref="paper",
+                    yref="paper",
+                    text=f"<b>Current Status (Day {current_day}):</b><br>"
+                         f"Spent: ${current_actual:,.2f}<br>"
+                         f"Budget: ${current_budget:,.2f}<br>"
+                         f"<span style='color:{status_color}'>{status_text}</span>",
+                    showarrow=False,
+                    align="left",
+                    bordercolor="gray",
+                    borderwidth=1,
+                    borderpad=4,
+                    bgcolor="white",
+                    opacity=0.9
+                )
+            ]
+        )
+        
+        st.plotly_chart(fig_budget, use_container_width=True)
+        
+        # Add daily spending table for the current month
+        st.write("#### Daily Spending This Month")
+        display_df = budget_df[['date', 'day_of_month', 'daily_amount', 'cumulative_actual', 'cumulative_budget', 'variance']].copy()
+        display_df = display_df.rename(columns={
+            'date': 'Date',
+            'day_of_month': 'Day',
+            'daily_amount': 'Daily Amount',
+            'cumulative_actual': 'Cumulative Actual',
+            'cumulative_budget': 'Cumulative Budget',
+            'variance': 'Variance'
+        })
+        
+        # Format the display
+        display_df['Date'] = display_df['Date'].dt.strftime('%Y-%m-%d')
+        display_df['Daily Amount'] = display_df['Daily Amount'].apply(lambda x: f"${x:,.2f}")
+        display_df['Cumulative Actual'] = display_df['Cumulative Actual'].apply(lambda x: f"${x:,.2f}")
+        display_df['Cumulative Budget'] = display_df['Cumulative Budget'].apply(lambda x: f"${x:,.2f}")
+        
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
+    else:
+        create_info_box("No Data", "No data available for the current month.", "info")
